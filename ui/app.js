@@ -322,7 +322,7 @@ function buildGlance() {
   wireTasks(g.tiles, () => {});
   g.tiles.addEventListener("click", e => {
     const t = e.target.closest("[data-tile]"); if (!t) return;
-    if (t.dataset.tile === "tasks") showTab("todo"); else if (!S.ics_url) connectCalendar();
+    if (t.dataset.tile === "tasks") showTab("todo"); else if (!hasCal()) connectCalendar();
   });
   return page;
 }
@@ -356,7 +356,7 @@ function fitClock() {
 }
 
 function nextEvent() {
-  if (!S.ics_url) return ["Connect Outlook", "See your meetings here"];
+  if (!hasCal()) return ["Connect calendar", "See your meetings here"];
   if (!cache().events) return ["Loading…", "Fetching your calendar"];
   const now = new Date();
   const up = cache().events.filter(e => parseLocal(e.end) > now);
@@ -434,8 +434,11 @@ function renderWeatherHours() {
 }
 
 // calendar ---------------------------------------------------------------------------
+const calendars = () => S.calendars || (S.calendars = []);
+const hasCal = () => calendars().length > 0;
+const calLabel = (c, i) => c.name || c.auto || `Calendar ${i + 1}`;
 function eventsOn(d) {
-  if (!S.ics_url) return [];
+  if (!hasCal()) return [];
   return (cache().events || []).filter(e => {
     const s = parseLocal(e.start), en = parseLocal(e.end);
     const sd = parseIso(e.start), ed = parseIso(e.end);
@@ -529,15 +532,15 @@ function renderCalDetail(animate = false) {
 }
 function renderWeek() {
   if (!g.week) return;
-  const now = new Date(); const url = S.ics_url;
+  const now = new Date(); const url = hasCal();
   const evs = url ? (cache().events || []).filter(e => parseLocal(e.end) > now && parseLocal(e.start) < addDays(now, 7)) : [];
   const todayN = evs.filter(e => sameDay(parseLocal(e.start), now)).length;
   const tasksLeft = (D.days[todayIso()] || []).filter(t => !t.done).length;
   const brief = (url ? `Today: ${todayN} event${todayN === 1 ? "" : "s"} · ` : "Today: ") + `${tasksLeft} task${tasksLeft === 1 ? "" : "s"} left`;
   let body = "";
-  if (!url) body = `<div>See your upcoming Outlook meetings here.</div><button class="btn" style="margin-top:12px" data-connect>Connect Outlook</button>`;
+  if (!url) body = `<div>See your upcoming meetings from Google Calendar or Outlook here.</div><button class="btn" style="margin-top:12px" data-connect>Connect calendar</button>`;
   else {
-    if (cache().events_error) body += `<div class="label" style="color:var(--accent-text)">Couldn't refresh the calendar — showing the last saved events.</div>`;
+    if (cache().events_error) body += `<div class="label" style="color:var(--accent-text)">${esc(cache().events_error)}</div>`;
     if (!evs.length) body += `<div class="label">${cache().events ? "Nothing scheduled for the next week." : "Loading calendar…"}</div>`;
     let shown = null;
     for (const e of evs.slice(0, 5)) {
@@ -553,8 +556,7 @@ function renderWeek() {
   const c = $("[data-connect]", g.week); if (c) c.onclick = connectCalendar;
   const m = $("[data-cal-more]", g.week);
   if (m) m.onclick = e => { const r = e.target.getBoundingClientRect(); showMenu(r.left - 160, r.bottom + 4, [
-    ["Refresh calendar", () => refreshOnline(true)], ["Change calendar link…", connectCalendar],
-    "-", ["Disconnect calendar", () => { delete S.ics_url; delete cache().events; delete cache().events_fetched; delete cache().events_error; save(); renderWeek(); renderTiles(); renderCalDetail(); }]]); };
+    ["Refresh calendars", () => refreshOnline(true)], ["Calendars…", connectCalendar]]); };
 }
 
 // online refresh ---------------------------------------------------------------------
@@ -571,14 +573,7 @@ function refreshOnline(force = false) {
       });
     }
   }
-  if (S.ics_url && (force || stale(cache().events_fetched, 10))) {
-    call("events", S.ics_url).then(r => {
-      if (!r) return;
-      if (r.ok) { cache().events = r.events; delete cache().events_error; } else cache().events_error = r.error;
-      const n = new Date(); cache().events_fetched = `${isoOf(n)}T${pad2(n.getHours())}:${pad2(n.getMinutes())}:00`;
-      save(); renderTiles(); renderWeek(); renderCalDetail();
-    });
-  }
+  if (hasCal() && (force || stale(cache().events_fetched, 10))) refreshCalendars();
 }
 
 function changeCity(i) {
@@ -606,33 +601,92 @@ function changeCity(i) {
   $("[data-go]", s.el).onclick = search; $("[data-cancel]", s.el).onclick = s.close;
   setTimeout(() => q.focus(), 50);
 }
+let calBusy = null;
+function refreshCalendars() {
+  if (calBusy) return calBusy;
+  const list = calendars().slice();
+  calBusy = call("calendars", list.map(c => c.url)).then(r => {
+    calBusy = null;
+    if (!r || list.length !== calendars().length) return r;   // the list changed meanwhile: next refresh
+    const failed = Object.keys(r.errors || {}).map(Number);
+    cache().calendar_errors = r.errors || {};
+    (r.names || []).forEach((n, i) => { if (n && calendars()[i]) calendars()[i].auto = n; });
+    if (r.ok) {
+      cache().events = r.events;
+      if (failed.length) cache().events_error = failed.length === 1
+        ? `Couldn't refresh “${calLabel(calendars()[failed[0]], failed[0])}”.`
+        : `Couldn't refresh ${failed.length} calendars.`;
+      else delete cache().events_error;
+    } else cache().events_error = "Couldn't refresh your calendars — showing the last saved events.";
+    const n = new Date(); cache().events_fetched = `${isoOf(n)}T${pad2(n.getHours())}:${pad2(n.getMinutes())}:00`;
+    save(); renderTiles(); renderWeek(); renderCalDetail();
+    return r;
+  }, () => { calBusy = null; });
+  return calBusy;
+}
 function connectCalendar() {
-  const s = openSheet(`<h2>Connect Outlook calendar</h2>
-    <div class="muted">1. Open your Outlook calendar settings in the browser:</div>
-    <a data-url="https://outlook.office.com/calendar/options/calendar/SharedCalendars">Work or school account ↗</a>
-    <a data-url="https://outlook.live.com/calendar/0/options/calendar/SharedCalendars">Personal account (Outlook.com / Hotmail) ↗</a>
-    <div class="muted" style="margin-top:8px">2. Under “Publish a calendar”, choose your calendar and “Can view all details”, then click Publish.</div>
-    <div class="muted" style="margin-top:8px">3. Copy the ICS link and paste it here:</div>
-    <div class="field"><input placeholder="https://outlook.office365.com/owa/calendar/…/calendar.ics" data-url-in></div>
+  const s = openSheet(`<h2>Calendars</h2>
+    <div class="muted">Add one link per calendar. They're combined into one view.</div>
+    <div class="cal-list" data-list></div>
+    <div class="field"><input placeholder="Paste a calendar link (ICS)" data-url-in></div>
     <div class="muted" data-status></div>
-    <div class="muted" style="margin-top:6px">The link is saved only on this PC. Anyone who has it can see your calendar, so keep it private.</div>
-    <div class="actions"><button class="btn" data-go>Connect</button><button class="btn ghost" data-cancel>Cancel</button></div>`);
+    <div class="actions"><button class="btn" data-go>Add</button><button class="btn ghost" data-cancel>Done</button></div>
+    <details class="howto"><summary>Google Calendar: where to find the link</summary>
+      <div class="muted">1. Open <a data-url="https://calendar.google.com/calendar/r/settings">Google Calendar settings ↗</a></div>
+      <div class="muted">2. On the left, under “Settings for my calendars”, click a calendar.</div>
+      <div class="muted">3. Scroll to “Integrate calendar” and copy the <b>Secret address in iCal format</b>.</div>
+      <div class="muted">Google gives each calendar its own link, so repeat this for every calendar you want. For holidays and other shared calendars, use “Public address in iCal format”.</div>
+    </details>
+    <details class="howto"><summary>Outlook: where to find the link</summary>
+      <div class="muted">1. Open <a data-url="https://outlook.office.com/calendar/options/calendar/SharedCalendars">work or school ↗</a> or <a data-url="https://outlook.live.com/calendar/0/options/calendar/SharedCalendars">personal ↗</a> calendar settings.</div>
+      <div class="muted">2. Under “Publish a calendar”, choose a calendar and “Can view all details”, then Publish.</div>
+      <div class="muted">3. Copy the ICS link.</div>
+    </details>
+    <div class="muted" style="margin-top:10px">Links are saved only on this PC. Anyone who has one can see that calendar, so keep them private.</div>`);
   $$("[data-url]", s.el).forEach(a => a.onclick = () => call("open_url", a.dataset.url));
-  const input = $("[data-url-in]", s.el), status = $("[data-status]", s.el);
-  input.value = S.ics_url || "";
+  const input = $("[data-url-in]", s.el), status = $("[data-status]", s.el), listEl = $("[data-list]", s.el);
+  const say = (t, bad) => { status.textContent = t; status.style.color = bad ? "var(--accent-text)" : ""; };
+  const changed = () => { save(); renderTiles(); renderWeek(); renderCalDetail(); };
+  const draw = () => {
+    const errs = cache().calendar_errors || {};
+    listEl.innerHTML = calendars().map((c, i) => `<div class="cal-row" data-i="${i}">
+      <div class="grow name">${esc(calLabel(c, i))}${errs[i] ? '<span class="muted"> · not loading</span>' : ""}</div>
+      <button class="link" data-rename>Rename</button><button class="link" data-remove>Remove</button></div>`).join("")
+      || `<div class="muted">No calendars yet.</div>`;
+  };
+  listEl.addEventListener("click", e => {
+    const row = e.target.closest("[data-i]"); if (!row) return; const i = +row.dataset.i;
+    if (e.target.closest("[data-remove]")) {
+      calendars().splice(i, 1); delete cache().calendar_errors;
+      if (!hasCal()) { delete cache().events; delete cache().events_fetched; delete cache().events_error; }
+      else cache().events = (cache().events || []).filter(ev => ev.cal !== i).map(ev => ev.cal > i ? { ...ev, cal: ev.cal - 1 } : ev);
+      changed(); draw(); say("Removed.");
+    } else if (e.target.closest("[data-rename]")) {
+      const nameEl = $(".name", row); const c = calendars()[i];
+      nameEl.innerHTML = `<input class="rename" value="${esc(calLabel(c, i))}">`;
+      const inp = $("input", nameEl); inp.focus(); inp.select();
+      const done = keep => { if (keep) { c.name = inp.value.trim(); changed(); } draw(); };
+      inp.addEventListener("keydown", ev => { if (ev.key === "Enter") done(true); if (ev.key === "Escape") done(false); });
+      inp.addEventListener("blur", () => done(true));
+    }
+  });
   const go = () => {
     const url = input.value.trim();
-    if (!/^(https?|webcal):\/\//i.test(url)) { status.textContent = "Paste the full link (it starts with https://)."; status.style.color = "var(--accent-text)"; return; }
-    status.style.color = ""; status.textContent = "Checking the link…";
+    if (!url) return;
+    if (!/^(https?|webcal):\/\//i.test(url)) return say("Paste the full link (it starts with https://).", true);
+    if (calendars().some(c => c.url === url)) return say("That calendar is already added.", true);
+    say("Checking the link…");
     call("events", url).then(r => {
-      if (!r || !r.ok) { status.style.color = "var(--accent-text)"; status.textContent = `That didn't work: ${r ? r.error : "no connection"}`; return; }
-      S.ics_url = url; cache().events = r.events; delete cache().events_error;
-      const n = new Date(); cache().events_fetched = `${isoOf(n)}T${pad2(n.getHours())}:${pad2(n.getMinutes())}:00`;
-      save(); s.close(); renderTiles(); renderWeek(); renderCalDetail(); toast("Calendar connected");
+      if (!r || !r.ok) return say(`That didn't work: ${r ? r.error : "no connection"}`, true);
+      calendars().push({ url, auto: r.name || "" });
+      const i = calendars().length - 1;
+      input.value = ""; say(`Added “${calLabel(calendars()[i], i)}”. Paste another link to add more.`);
+      draw(); changed(); refreshCalendars().then(() => draw());
     });
   };
   input.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
   $("[data-go]", s.el).onclick = go; $("[data-cancel]", s.el).onclick = s.close;
+  draw();
   setTimeout(() => input.focus(), 50);
 }
 
@@ -1119,6 +1173,7 @@ async function start() {
   ui.noteId = S.open_note && D.notes.some(n => n.id === S.open_note) ? S.open_note : null;
   applyTheme();
   S.layer = S.layer || (S.on_top ? "top" : "desktop");
+  if (S.ics_url) { calendars().unshift({ url: S.ics_url, auto: "" }); delete S.ics_url; save(); }   // 1.5.7 and older: one link
   $("#pin").classList.toggle("on", S.layer === "top");
   wireChrome();
   ui.tab = "glance";

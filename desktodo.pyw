@@ -78,10 +78,23 @@ class Api:
             return {"ok": False, "error": str(exc)}
 
     def events(self, url):
+        """Check one calendar link (used when adding it)."""
         try:
-            return {"ok": True, "events": core.fetch_events(url)}
+            name, events = core.fetch_calendar(url)
+            return {"ok": True, "events": events, "name": name}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def calendars(self, urls):
+        """All connected calendars, merged. ok is true if at least one of them could be read."""
+        try:
+            events, names, errors = core.fetch_calendars(list(urls or []))
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        ok = len(errors) < len(urls or [])
+        first = next(iter(errors.values()), "")
+        return {"ok": ok, "events": events, "names": names,
+                "errors": {str(k): v for k, v in errors.items()}, "error": first}
 
     def open_url(self, url):
         if url.startswith("https://"):

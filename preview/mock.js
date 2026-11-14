@@ -44,7 +44,10 @@
       },
       notes: [{ id: "n1", title: "Packing list", updated: at(now, now.getHours(), 0),
         html: "<div>Boots, <b>gloves</b>, the good jacket.</div><div><b>Gear</b></div><ul><li>Skis</li><li>Poles<ul><li>Spare baskets</li></ul></li></ul>" }],
-      settings: { theme: "dark", ics_url: "https://example.invalid/calendar.ics" },
+      settings: { theme: "dark", calendars: [
+        { url: "https://example.invalid/personal.ics", auto: "Joy M" },
+        { url: "https://example.invalid/work.ics", auto: "Work_Meetings" },
+        { url: "https://example.invalid/holidays.ics", auto: "Holidays in United States" }] },
       cache: {
         weather: { "39.550,-107.325": weather(3.2, 2), "39.369,-107.033": weather(1.5, 71) },
         events: events(), events_fetched: at(now, now.getHours(), now.getMinutes()),
@@ -62,7 +65,8 @@
     get_state: () => Promise.resolve({ data: load(), smoke: false }),
     save: d => { try { localStorage.setItem(KEY, JSON.stringify(d)); } catch (e) { /* ignore */ } return Promise.resolve(true); },
     weather: () => Promise.resolve({ ok: false, error: "Preview uses sample weather" }),
-    events: () => Promise.resolve({ ok: true, events: events() }),
+    events: url => Promise.resolve({ ok: true, events: [], name: (url.split("/").pop() || "").replace(/\.ics$/i, "").replace(/[_-]+/g, " ") }),
+    calendars: urls => Promise.resolve({ ok: true, events: events(), names: urls.map(() => ""), errors: {} }),
     geocode: q => Promise.resolve({ ok: true, places: [
       { name: q.split(",")[0].trim() || "Aspen", region: "Colorado", country: "United States", lat: 39.19, lon: -106.82 }] }),
     open_url: url => { window.open(url, "_blank", "noopener"); },

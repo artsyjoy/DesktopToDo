@@ -1,5 +1,5 @@
 """
-DeskTodo core: storage, midnight roll-over, weather (open-meteo.com) and Outlook calendar (ICS) parsing.
+DeskTodo core: storage, midnight roll-over, weather (open-meteo.com) and calendar (ICS: Google, Outlook) parsing.
 No user interface here - the window is drawn by desktodo.pyw with WebView2.
 """
 
@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from html import escape
 
 APP_NAME = "DeskTodo"
-APP_VERSION = "1.5.7"   # shown in the top-bar right-click menu; bump with each release
+APP_VERSION = "1.5.8"   # shown in the top-bar right-click menu; bump with each release
 BULLET = "\u2022  "
 
 # =========================================================================== paths & storage
@@ -481,16 +481,55 @@ def parse_ics(text, win_start, win_end):
     return out
 
 
-def fetch_events(url):
+def fetch_calendar(url):
+    """One ICS link -> (calendar name or "", events)."""
     url = url.strip()
     if url.lower().startswith("webcal://"):
         url = "https://" + url[9:]
     text = http_get(url, timeout=30)
     if "BEGIN:VCALENDAR" not in text[:2000].upper():
         raise ValueError("That link didn't return a calendar (ICS) file.")
+    m = re.search(r"^X-WR-CALNAME:(.*)$", text[:20000], re.M | re.I)
+    name = m.group(1).strip().replace("\\,", ",").replace("\\;", ";") if m else ""
     today0 = datetime.combine(date.today(), datetime.min.time())
     # a window wide enough for the month calendar as well as "Up next"
-    return parse_ics(text, today0 - timedelta(days=35), today0 + timedelta(days=100))
+    return name, parse_ics(text, today0 - timedelta(days=35), today0 + timedelta(days=100))
+
+
+def fetch_events(url):
+    return fetch_calendar(url)[1]
+
+
+def fetch_calendars(urls):
+    """Several ICS links fetched side by side and merged into one list.
+
+    Returns (events, names, errors): events are tagged with their calendar's position ("cal"), the same
+    meeting found in two calendars is shown once, and errors maps a position to what went wrong."""
+    from concurrent.futures import ThreadPoolExecutor
+    results = [None] * len(urls)
+
+    def one(i):
+        try:
+            results[i] = fetch_calendar(urls[i])
+        except Exception as exc:
+            results[i] = exc
+
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(urls)))) as pool:
+        list(pool.map(one, range(len(urls))))
+    events, names, errors, seen = [], [], {}, set()
+    for i, r in enumerate(results):
+        if isinstance(r, Exception):
+            names.append("")
+            errors[i] = str(r) or type(r).__name__
+            continue
+        names.append(r[0])
+        for e in r[1]:
+            key = (e["start"], e["end"], e["title"].strip().lower())
+            if key not in seen:
+                seen.add(key)
+                events.append(dict(e, cal=i))
+    events.sort(key=lambda e: (e["start"], not e["all_day"]))
+    return events, names, errors
 
 
 
