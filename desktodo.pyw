@@ -24,7 +24,7 @@ At a glance tab
   upcoming Outlook meetings (via your calendar's published ICS link) and today's tasks.
 
 Anywhere
-  Ctrl+1 / 2 / 3               switch to To-do / Notes / At a glance
+  Ctrl+1 / 2 / 3               switch to At a glance / To-do / Notes
   Ctrl+T                       keep window on top
 """
 
@@ -134,17 +134,18 @@ def roll_over(data):
 # =========================================================================== look
 
 THEMES = {
+    # Calm, warm neutrals with one amber accent (inspired by Rivian's app).
     "light": {
-        "bg": "#e8e8e8", "text": "#3a3a3a", "muted": "#8d8d8d", "faint": "#b3b3b3",
-        "line": "#cfcfcf", "accent": "#f2551d", "check": "#ffffff", "field": "#e8e8e8",
-        "chip": "#d9d9d9", "sel": "#f7c3ae", "card": "#f5f5f5", "on_accent": "#ffffff",
-        "on_accent_muted": "#ffd9cb",
+        "bg": "#efeee9", "card": "#ffffff", "text": "#161616", "muted": "#7b7a75", "faint": "#b2b1ab",
+        "line": "#dcdbd5", "chip": "#e3e2dc", "field": "#efeee9", "sel": "#f6dc8c",
+        "accent": "#f5b400", "accent_text": "#a77a00", "on_accent": "#161616", "on_accent_muted": "#5c4500",
+        "check": "#161616",
     },
     "dark": {
-        "bg": "#3c3c3c", "text": "#f1f1f1", "muted": "#a6a6a6", "faint": "#777777",
-        "line": "#545454", "accent": "#f2551d", "check": "#ffffff", "field": "#3c3c3c",
-        "chip": "#4b4b4b", "sel": "#7a3a22", "card": "#474747", "on_accent": "#ffffff",
-        "on_accent_muted": "#ffd9cb",
+        "bg": "#111111", "card": "#1d1d1d", "text": "#f2f2f0", "muted": "#8e8e8a", "faint": "#565654",
+        "line": "#2b2b2b", "chip": "#282828", "field": "#111111", "sel": "#5a4500",
+        "accent": "#f5b400", "accent_text": "#f5b400", "on_accent": "#111111", "on_accent_muted": "#3d2e00",
+        "check": "#111111",
     },
 }
 
@@ -171,14 +172,17 @@ def setup_fonts(root):
     if "Barlow" in fams:
         body, heavy = "Barlow", ("Barlow ExtraBold" if "Barlow ExtraBold" in fams else "Barlow")
         semi = "Barlow SemiBold" if "Barlow SemiBold" in fams else "Barlow"
+        light = "Barlow Light" if "Barlow Light" in fams else "Barlow"
         heavy_w = "normal" if heavy != "Barlow" else "bold"
         semi_w = "normal" if semi != "Barlow" else "bold"
     elif "Bahnschrift" in fams:
         body = "Bahnschrift"
         heavy = "Bahnschrift SemiBold" if "Bahnschrift SemiBold" in fams else "Bahnschrift"
         semi, heavy_w, semi_w = heavy, "bold", "normal"
+        light = "Bahnschrift Light" if "Bahnschrift Light" in fams else "Bahnschrift"
     else:
         body = heavy = semi = "Segoe UI"
+        light = "Segoe UI Light" if "Segoe UI Light" in fams else "Segoe UI"
         heavy_w = semi_w = "bold"
 
     F = tkfont.Font
@@ -194,8 +198,11 @@ def setup_fonts(root):
         "small_b": F(root, family=semi, size=9, weight=semi_w),
         "note_title": F(root, family=semi, size=12, weight=semi_w),
         "icon": F(root, family=body, size=14),
-        "clock": F(root, family=heavy, size=56, weight=heavy_w),
-        "temp": F(root, family=heavy, size=30, weight=heavy_w),
+        "clock": F(root, family=light, size=56),
+        "temp": F(root, family=light, size=32),
+        "month": F(root, family=heavy, size=40, weight=heavy_w),
+        "year": F(root, family=semi, size=15, weight=semi_w),
+        "cal": F(root, family=semi, size=13, weight=semi_w),
     }
 
 
@@ -279,7 +286,7 @@ def bind_hover(row, show, hide):
 
 def menu(root, colors, items):
     m = tk.Menu(root, tearoff=0, bg=colors["bg"], fg=colors["text"], bd=0,
-                activebackground=colors["accent"], activeforeground="#ffffff")
+                activebackground=colors["accent"], activeforeground=colors["on_accent"])
     for label, cmd in items:
         if label is None:
             m.add_separator()
@@ -322,8 +329,10 @@ def pill(parent, text, command, colors, fonts, primary=True, bg=None):
     """Small rounded-looking button used everywhere (same look as + NEW)."""
     C = colors
     lbl = tk.Label(parent, text=text, font=fonts["small_b"], padx=12, pady=5, cursor="hand2",
-                   bg=C["accent"] if primary else (bg or C["chip"]),
-                   fg=C["on_accent"] if primary else C["text"])
+                   bg=C["accent"] if primary else (bg or C["bg"]),
+                   fg=C["on_accent"] if primary else C["text"],
+                   highlightthickness=0 if primary else 1, highlightbackground=C["line"],
+                   highlightcolor=C["line"])
     lbl.bind("<Button-1>", lambda e: command())
     return lbl
 
@@ -340,9 +349,7 @@ class App:
         self.today = today_iso()
 
         self.F = setup_fonts(root)
-        self.tab = self.settings.get("tab", "todo")
-        if self.tab not in self.VIEWS:
-            self.tab = "todo"
+        self.tab = "glance"  # always open on At a glance
         self.view = None
         self.q = queue.Queue()
         self.set_icon(root)
@@ -359,16 +366,16 @@ class App:
         root.bind_all("<Button-4>", lambda e: self._wheel(e, -1))
         root.bind_all("<Button-5>", lambda e: self._wheel(e, 1))
         root.bind("<Control-t>", lambda e: self.toggle_on_top())
-        root.bind("<Control-Key-1>", lambda e: self.switch("todo"))
-        root.bind("<Control-Key-2>", lambda e: self.switch("notes"))
-        root.bind("<Control-Key-3>", lambda e: self.switch("glance"))
+        root.bind("<Control-Key-1>", lambda e: self.switch("glance"))
+        root.bind("<Control-Key-2>", lambda e: self.switch("todo"))
+        root.bind("<Control-Key-3>", lambda e: self.switch("notes"))
 
         self.build()
         self.persist()
         self.root.after(15_000, self._tick)
         self.root.after(150, self._poll)
 
-    VIEWS = ("todo", "notes", "glance")
+    VIEWS = ("glance", "todo", "notes")
     TAB_LABELS = {"todo": "TO-DO", "notes": "NOTES", "glance": "AT A GLANCE"}
 
     @staticmethod
@@ -513,7 +520,7 @@ class App:
 
     @property
     def C(self):
-        return THEMES[self.settings.get("theme", "light")]
+        return THEMES[self.settings.get("theme", "dark")]
 
     # ---- shell -----------------------------------------------------------------
 
@@ -537,7 +544,7 @@ class App:
                              cursor="hand2", padx=2)
             close.pack(side="right", padx=(10, 0))
             close.bind("<Button-1>", lambda e: self.on_close())
-            close.bind("<Enter>", lambda e: close.config(fg=C["accent"]))
+            close.bind("<Enter>", lambda e: close.config(fg=C["accent_text"]))
             close.bind("<Leave>", lambda e: close.config(fg=C["faint"]))
         for key in self.VIEWS:
             label = self.TAB_LABELS[key]
@@ -551,7 +558,7 @@ class App:
             lbl.bind("<Button-1>", lambda e, k=key: self.switch(k))
 
         # theme toggle (drawn, so it looks the same everywhere)
-        dark = self.settings.get("theme") == "dark"
+        dark = self.settings.get("theme", "dark") == "dark"
         icon = tk.Canvas(top, width=22, height=22, bg=C["bg"], highlightthickness=0, cursor="hand2")
         icon.pack(side="right")
         if dark:  # sun -> switch to light
@@ -566,15 +573,14 @@ class App:
 
         on_top = bool(self.settings.get("on_top"))
         pin = tk.Label(top, text="PIN", font=self.F["small_b"], cursor="hand2", padx=6,
-                       bg=C["accent"] if on_top else C["bg"], fg="#ffffff" if on_top else C["faint"])
+                       bg=C["accent"] if on_top else C["bg"], fg=C["on_accent"] if on_top else C["faint"])
         pin.pack(side="right", padx=(0, 12))
         pin.bind("<Button-1>", lambda e: self.toggle_on_top())
 
         if self.widget:  # thin bottom strip with a resize handle in the corner
             strip_bg = C["bg"]
             if self.tab == "todo":
-                step = 0.045 if self.settings.get("theme") != "dark" else 0.075
-                strip_bg = shade(C["bg"], step * (TodoView.DAYS - 1))
+                strip_bg = section_bg(C, self.settings.get("theme", "dark") == "dark", TodoView.DAYS - 1)
             strip = tk.Frame(self.root, bg=strip_bg, height=14)
             strip.pack(side="bottom", fill="x")
             grip = tk.Canvas(strip, width=14, height=14, highlightthickness=0, bg=strip_bg,
@@ -603,7 +609,7 @@ class App:
 
     def toggle_theme(self):
         self.leaving()
-        self.settings["theme"] = "light" if self.settings.get("theme") == "dark" else "dark"
+        self.settings["theme"] = "light" if self.settings.get("theme", "dark") == "dark" else "dark"
         self.persist()
         self.build()
 
@@ -652,10 +658,16 @@ class App:
 # =========================================================================== to-do tab
 
 
-def shade(color, amount):
-    """Darken a #rrggbb colour by `amount` (0..1)."""
-    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
-    return "#%02x%02x%02x" % tuple(int(c * (1 - amount)) for c in (r, g, b))
+def mix(color, target, amount):
+    """Blend #rrggbb `color` towards `target` by `amount` (0..1)."""
+    a = [int(color[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(target[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * amount) for x, y in zip(a, b))
+
+
+def section_bg(C, dark, i):
+    """Background of the i-th day band: each later day steps a little further from the page colour."""
+    return mix(C["bg"], "#ffffff" if dark else "#000000", (0.028 if dark else 0.035) * i)
 
 
 def clock_text(now):
@@ -696,8 +708,7 @@ class TodoView:
         return f"{d:%B} {d.day}, {d.year}  —  {clock_text(datetime.now())}"
 
     def day_bg(self, i):
-        step = 0.045 if self.app.settings.get("theme") != "dark" else 0.075
-        return shade(self.C["bg"], step * i)
+        return section_bg(self.C, self.app.settings.get("theme", "dark") == "dark", i)
 
     # ---- data helpers ----------------------------------------------------------
 
@@ -1346,7 +1357,8 @@ def fetch_events(url):
     if "BEGIN:VCALENDAR" not in text[:2000].upper():
         raise ValueError("That link didn't return a calendar (ICS) file.")
     today0 = datetime.combine(date.today(), datetime.min.time())
-    return parse_ics(text, today0, today0 + timedelta(days=8))
+    # a window wide enough for the month calendar as well as "Up next"
+    return parse_ics(text, today0 - timedelta(days=35), today0 + timedelta(days=100))
 
 
 # =========================================================================== at-a-glance tab
@@ -1404,6 +1416,9 @@ class GlanceView:
         self.measure = self.F["clock"].copy()
         self.measure.configure(size=100)
         self.width = 400
+        t = date.today()
+        self.cal_month, self.cal_sel = (t.year, t.month), t
+        self.wraps = []
         self.scroll = ScrollArea(parent, self.C, on_width=self.on_width)
         self.scroll.pack(fill="both", expand=True)
         self.build()
@@ -1467,15 +1482,15 @@ class GlanceView:
             card = self.weather_card(grid, i, city)
             card.grid(row=0, column=i, sticky="ew", padx=(0, GAP // 2) if i == 0 else (GAP // 2, 0))
 
+        self.calendar_card(wrap).pack(fill="x", pady=(GAP, 0))
         self.events_card(wrap).pack(fill="x", pady=(GAP, 0))
-        self.tasks_card(wrap).pack(fill="x", pady=(GAP, 0))
 
         self.update_clock()
         self.on_width(self.width)
 
     def weather_card(self, parent, i, city):
         C, F = self.C, self.F
-        accent = i == 0
+        accent = False  # all weather cards share the neutral card style
         fill = C["accent"] if accent else C["card"]
         fg = C["on_accent"] if accent else C["text"]
         mut = C["on_accent_muted"] if accent else C["muted"]
@@ -1498,7 +1513,7 @@ class GlanceView:
             icon = tk.Canvas(mid, width=34, height=36, bg=fill, highlightthickness=0)
             icon.pack(side="right", anchor="s")
             desc, kind = WEATHER_CODES.get(int(w["code"]), ("", "cloud"))
-            draw_weather_icon(icon, kind, w.get("is_day", 1), fg, C["on_accent"] if accent else C["accent"])
+            draw_weather_icon(icon, kind, w.get("is_day", 1), C["muted"], C["accent"])
             tk.Label(card.inner, text=desc, font=F["small_b"], fg=fg, bg=fill).pack(anchor="w")
             tk.Label(card.inner, text=f"H {self.to_unit(w['hi'])}   L {self.to_unit(w['lo'])}",
                      font=F["small"], fg=mut, bg=fill).pack(anchor="w")
@@ -1522,7 +1537,8 @@ class GlanceView:
             more.bind("<Button-1>", self.calendar_menu)
 
         now = datetime.now()
-        events = [e for e in self.cache.get("events", []) if datetime.fromisoformat(e["end"]) > now] if url else []
+        events = [e for e in self.cache.get("events", []) if datetime.fromisoformat(e["end"]) > now
+                  and datetime.fromisoformat(e["start"]) < now + timedelta(days=7)] if url else []
         today_left = sum(1 for e in events if datetime.fromisoformat(e["start"]).date() == now.date())
         tasks_left = sum(1 for t in self.app.data["days"].get(today_iso(), []) if not t["done"])
         brief = (f"Today: {today_left} event{'s' if today_left != 1 else ''} · " if url else "Today: ") + \
@@ -1539,7 +1555,7 @@ class GlanceView:
 
         if self.cache.get("events_error"):
             err = tk.Label(card.inner, text="Couldn't refresh the calendar — showing the last saved events.",
-                           font=F["small"], fg=C["accent"], bg=C["card"], justify="left", anchor="w")
+                           font=F["small"], fg=C["accent_text"], bg=C["card"], justify="left", anchor="w")
             err.pack(fill="x", pady=(0, 6))
             self.wraps.append((err, "full"))
         if not events:
@@ -1548,7 +1564,7 @@ class GlanceView:
             return card
 
         shown_day, first_group = None, False
-        for e in events[:8]:
+        for e in events[:5]:
             s, en = datetime.fromisoformat(e["start"]), datetime.fromisoformat(e["end"])
             d = s.date() if s > now else now.date()
             if d != shown_day:
@@ -1563,7 +1579,7 @@ class GlanceView:
             live = s <= now < en
             when = "All day" if e["all_day"] else ("NOW" if live else fmt_time(s, self.h24))
             tk.Label(row, text=when, font=F["small_b"], width=7, anchor="w", bg=C["card"],
-                     fg=C["accent"] if live else C["text"]).pack(side="left", anchor="n", pady=(2, 0))
+                     fg=C["accent_text"] if live else C["text"]).pack(side="left", anchor="n", pady=(2, 0))
             col = tk.Frame(row, bg=C["card"])
             col.pack(side="left", fill="x", expand=True)
             t = tk.Label(col, text=e["title"], font=F["body"], fg=C["text"], bg=C["card"], anchor="w", justify="left")
@@ -1619,13 +1635,190 @@ class GlanceView:
         size = int(100 * avail / max(1, self.measure.measure(sample)))
         self.F["clock"].configure(size=max(28, min(90, size)))
         inner = width - 2 * PAD - 2 * CARD_PAD
-        for lbl, kind in getattr(self, "wraps", []):
+        self.wraps = [(l, k) for l, k in self.wraps if l.winfo_exists()]
+        for lbl, kind in self.wraps:
             try:
                 wl = {"full": inner, "event": inner - 70, "task": inner - 30,
                       "half": (width - 2 * PAD - GAP) // 2 - 2 * CARD_PAD - 24}[kind]
                 lbl.config(wraplength=max(60, wl))
             except tk.TclError:
                 pass
+
+    # ---- calendar ------------------------------------------------------------------
+
+    def calendar_card(self, parent):
+        card = Card(parent, self.C["bg"], self.C["card"])
+        self.cal_box = card.inner
+        self.render_calendar()
+        return card
+
+    def events_on(self, d):
+        if not self.settings.get("ics_url"):
+            return []
+        out = []
+        for e in self.cache.get("events", []):
+            s, en = datetime.fromisoformat(e["start"]), datetime.fromisoformat(e["end"])
+            if s.date() == d or s.date() < d < en.date() or (s.date() < d == en.date() and en.time() != datetime.min.time()):
+                out.append(e)
+        return out
+
+    def busy_days(self, y, m):
+        busy = set()
+        for iso, tasks in self.app.data["days"].items():
+            if iso[:7] == f"{y:04d}-{m:02d}" and any(not t["done"] for t in tasks):
+                busy.add(int(iso[8:10]))
+        for e in self.cache.get("events", []) if self.settings.get("ics_url") else []:
+            s = datetime.fromisoformat(e["start"])
+            if (s.year, s.month) == (y, m):
+                busy.add(s.day)
+        return busy
+
+    def render_calendar(self):
+        box, C, F = self.cal_box, self.C, self.F
+        fill = C["card"]
+        for w in box.winfo_children():
+            w.destroy()
+        today = date.today()
+        y, m = self.cal_month
+        current = (y, m) == (today.year, today.month)
+
+        head = tk.Frame(box, bg=fill)
+        head.pack(fill="x")
+        left = tk.Frame(head, bg=fill)
+        left.pack(side="left")
+        col = C["accent_text"] if current else C["text"]
+        tk.Label(left, text=date(y, m, 1).strftime("%b"), font=F["month"], fg=col, bg=fill,
+                 bd=0, pady=0).pack(anchor="w")
+        tk.Label(left, text=str(y), font=F["year"], fg=col, bg=fill).pack(anchor="w")
+        nav = tk.Frame(head, bg=fill)
+        nav.pack(side="right", anchor="n", pady=(6, 0))
+        for txt, delta in (("›", 1), ("‹", -1)):
+            b = tk.Label(nav, text=txt, font=F["title"], fg=C["muted"], bg=fill, cursor="hand2", padx=7)
+            b.pack(side="right")
+            b.bind("<Button-1>", lambda e, d=delta: self.shift_month(d))
+        pill(nav, "TODAY", self.cal_today, C, F, primary=False, bg=fill).pack(side="right", padx=(0, 6))
+
+        tk.Frame(box, height=1, bg=C["line"]).pack(fill="x", pady=(10, 8))
+        grid = tk.Frame(box, bg=fill)
+        grid.pack(fill="x")
+        for c in range(7):
+            grid.columnconfigure(c, weight=1, uniform="cal")
+        for c, letter in enumerate("MTWTFSS"):
+            tk.Label(grid, text=letter, font=F["small_b"], fg=C["muted"], bg=fill, anchor="w").grid(
+                row=0, column=c, sticky="w", padx=(7, 0), pady=(0, 2))
+        first = date(y, m, 1)
+        busy = self.busy_days(y, m)
+        swipe_targets = [grid, box]
+        for i in range(days_in_month(y, m)):
+            d = first + timedelta(days=i)
+            r, c = divmod(first.weekday() + i, 7)
+            cell = tk.Canvas(grid, height=38, width=10, bg=fill, highlightthickness=0, cursor="hand2")
+            cell.grid(row=r + 1, column=c, sticky="ew")
+            cell.bind("<Configure>", lambda e, cv=cell, dd=d: self.draw_cell(cv, dd, dd.day in busy))
+            cell.bind("<ButtonPress-1>", self._swipe_start)
+            cell.bind("<ButtonRelease-1>", lambda e, dd=d: self._swipe_end(e, dd))
+        for w in swipe_targets:
+            w.bind("<ButtonPress-1>", self._swipe_start)
+            w.bind("<ButtonRelease-1>", lambda e: self._swipe_end(e, None))
+
+        tk.Frame(box, height=1, bg=C["line"]).pack(fill="x", pady=(8, 10))
+        self.render_day_detail(box)
+        self.on_width(self.width)
+
+    def draw_cell(self, cv, d, busy):
+        C, F = self.C, self.F
+        cv.delete("all")
+        w = cv.winfo_width()
+        selected, is_today = d == self.cal_sel, d == date.today()
+        fg = C["text"]
+        if selected:
+            round_rect(cv, 1, 2, min(w - 3, 44), 33, 10, fill=C["accent"], outline="")
+            fg = C["on_accent"]
+        elif is_today:
+            fg = C["accent_text"]
+        cv.create_text(8, 18, text=str(d.day), anchor="w", font=F["cal"], fill=fg)
+        if busy:
+            x = 8 + F["cal"].measure(str(d.day)) / 2
+            cv.create_oval(x - 2, 29, x + 2, 33, fill=fg if selected else C["muted"], outline="")
+
+    def _swipe_start(self, e):
+        self._swipe_x = e.x_root
+
+    def _swipe_end(self, e, d):
+        dx = e.x_root - getattr(self, "_swipe_x", e.x_root)
+        if dx > 40:
+            self.shift_month(-1)   # drag right -> previous month
+        elif dx < -40:
+            self.shift_month(1)    # drag left -> next month
+        elif d is not None:
+            self.cal_sel = d
+            self.render_calendar()
+
+    def shift_month(self, delta):
+        self.cal_month = add_months(*self.cal_month, delta)
+        self.render_calendar()
+
+    def cal_today(self):
+        t = date.today()
+        self.cal_month, self.cal_sel = (t.year, t.month), t
+        self.render_calendar()
+
+    def render_day_detail(self, box):
+        C, F = self.C, self.F
+        fill = C["card"]
+        d = self.cal_sel
+        label = f"{d:%A}, {d:%B} {d.day}".upper()
+        if d == date.today():
+            label += "  ·  TODAY"
+        tk.Label(box, text=label, font=F["small_b"], fg=C["muted"], bg=fill).pack(anchor="w", pady=(0, 4))
+        events = self.events_on(d)
+        tasks = self.app.data["days"].get(d.isoformat(), [])
+        for e in events:
+            row = tk.Frame(box, bg=fill)
+            row.pack(fill="x", pady=1)
+            s = datetime.fromisoformat(e["start"])
+            when = "All day" if e["all_day"] or s.date() != d else fmt_time(s, self.h24)
+            tk.Label(row, text=when, font=F["small_b"], width=7, anchor="w", fg=C["text"], bg=fill).pack(
+                side="left", anchor="n", pady=(2, 0))
+            t = tk.Label(row, text=e["title"], font=F["body"], fg=C["text"], bg=fill, anchor="w", justify="left")
+            t.pack(side="left", fill="x", expand=True)
+            self.wraps.append((t, "event"))
+        for task in tasks:
+            row = tk.Frame(box, bg=fill)
+            row.pack(fill="x", pady=1)
+            chk = tk.Canvas(row, width=15, height=15, bg=fill, highlightthickness=0, cursor="hand2")
+            if task["done"]:
+                chk.create_rectangle(1, 1, 13, 13, fill=C["accent"], outline=C["accent"])
+                chk.create_line(3.5, 7, 6, 9.8, 10.5, 4, fill=C["check"], width=2)
+            else:
+                chk.create_rectangle(1, 1, 13, 13, outline=C["muted"], width=1.4)
+            chk.pack(side="left", anchor="n", pady=(3, 0), padx=(0, 8))
+            chk.bind("<Button-1>", lambda e, t=task: self.toggle_task(t))
+            t = tk.Label(row, text=task["text"], font=F["body_done"] if task["done"] else F["body"],
+                         fg=C["muted"] if task["done"] else C["text"], bg=fill, anchor="w", justify="left")
+            t.pack(side="left", fill="x", expand=True)
+            self.wraps.append((t, "task"))
+        if not events and not tasks:
+            tk.Label(box, text="Nothing planned.", font=F["body"], fg=C["muted"], bg=fill).pack(anchor="w")
+        add = PlaceholderEntry(box, "Add a task for this day...", C, font=F["body"], bg=fill)
+        add.pack(fill="x", pady=(8, 0))
+
+        def add_task(_e=None):
+            text = add.value().strip()
+            if text:
+                self.app.data["days"].setdefault(d.isoformat(), []).append(
+                    {"id": new_id(), "text": text, "done": False, "children": []})
+                self.app.persist()
+                self.build()
+        add.bind("<Return>", add_task)
+
+    def toggle_task(self, task):
+        task["done"] = not task["done"]
+        if task["done"]:
+            for c in task.get("children", []):
+                c["done"] = True
+        self.app.persist()
+        self.build()
 
     # ---- clock -----------------------------------------------------------------
 
@@ -1757,7 +1950,7 @@ class GlanceView:
                                bg=C["bg"], anchor="w", cursor="hand2", pady=3)
                 lbl.pack(fill="x")
                 lbl.bind("<Button-1>", lambda e, p=place: pick(p))
-                lbl.bind("<Enter>", lambda e, w=lbl: w.config(fg=C["accent"]))
+                lbl.bind("<Enter>", lambda e, w=lbl: w.config(fg=C["accent_text"]))
                 lbl.bind("<Leave>", lambda e, w=lbl: w.config(fg=C["text"]))
 
         def search():
@@ -1798,7 +1991,7 @@ class GlanceView:
             return lbl
 
         def link(t, url):
-            lbl = tk.Label(body, text=t + "  ↗", font=F["small_b"], fg=C["accent"], bg=C["bg"],
+            lbl = tk.Label(body, text=t + "  ↗", font=F["small_b"], fg=C["accent_text"], bg=C["bg"],
                            cursor="hand2", anchor="w")
             lbl.pack(fill="x", pady=(0, 4))
             lbl.bind("<Button-1>", lambda e: webbrowser.open(url))
@@ -1824,7 +2017,7 @@ class GlanceView:
             if not d.winfo_exists():
                 return
             if err:
-                status.config(text=f"That didn't work: {err}", fg=C["accent"])
+                status.config(text=f"That didn't work: {err}", fg=C["accent_text"])
                 return
             self.settings["ics_url"] = entry.get().strip()
             self.cache["events"] = res
@@ -1838,7 +2031,7 @@ class GlanceView:
         def save():
             url = entry.get().strip()
             if not url.lower().startswith(("https://", "http://", "webcal://")):
-                status.config(text="Paste the full link (it starts with https://).", fg=C["accent"])
+                status.config(text="Paste the full link (it starts with https://).", fg=C["accent_text"])
                 return
             status.config(text="Checking the link...", fg=C["muted"])
             self.app.run_bg(lambda: fetch_events(url), done)
@@ -2146,7 +2339,7 @@ class NotesView:
         state = {"b": self.bold_mode, "bullet": self.is_bullet_line(),
                  "h": "h" in self.text.tag_names("insert linestart")}
         for k, btn in self.tools.items():
-            btn.config(bg=C["accent"] if state[k] else C["chip"], fg="#ffffff" if state[k] else C["text"])
+            btn.config(bg=C["accent"] if state[k] else C["chip"], fg=C["on_accent"] if state[k] else C["text"])
 
     # saving -----------------------------------------------------------------
 

@@ -21,7 +21,7 @@ A to-do list, notes and "at a glance" dashboard that lives on your Windows deskt
 - Toolbar: **B** bold (or Ctrl+B), **H** heading, **•≡** bullet list.
 - In a bullet list, Enter starts the next bullet. Enter on an empty bullet (or Backspace right after the bullet) ends the list.
 
-## At a glance tab
+## At a glance tab (opens first)
 
 - A big clock (12h / 24h toggle) with today's date and sunrise/sunset.
 - Weather for two places (Glenwood Springs and Basalt, CO to start). Click **···** on a weather card
@@ -30,16 +30,18 @@ A to-do list, notes and "at a glance" dashboard that lives on your Windows deskt
   ("Today: 2 events · 3 tasks left").
   Click **+ CONNECT OUTLOOK** and follow the 3 steps: in Outlook on the web, *Settings → Calendar →
   Shared calendars → Publish a calendar*, then paste the **ICS** link. Refreshes every 10 minutes.
-- **Today's tasks:** tick them off right from here; click **OPEN ›** to jump to the To-do tab.
+- **Calendar:** a month view with today highlighted. Drag left/right (or use **‹ ›**) to move between
+  months and click **TODAY** to jump back. Dots mark days with meetings or open tasks. Click a date to see
+  that day's meetings and tasks, tick tasks off, or add a task for that day.
 
 ## Everywhere
 
 - DeskTodo looks like a desktop widget: no title bar. **Drag the top bar** (the empty space next to the tabs)
   to move it, drag the **bottom-right corner** to resize, and click **×** to close.
 - **Right-click the top bar** for: keep on top, show/hide the normal window frame, close.
-- Moon / sun icon: switch between light and dark themes.
+- Moon / sun icon: switch between light and dark themes (dark is the default).
 - **PIN** keeps the window on top of other windows (Ctrl+T).
-- Ctrl+1 / Ctrl+2 / Ctrl+3 switch between To-do, Notes and At a glance.
+- Ctrl+1 / Ctrl+2 / Ctrl+3 switch between At a glance, To-do and Notes.
 - Everything (tasks, notes, settings, last weather) is saved to `%APPDATA%\DeskTodo\data.json` as you go,
   so closing and reopening the app — or replacing the .exe with a new version — keeps all of it.
 
