@@ -43,7 +43,7 @@
         [iso(day(2))]: [{ id: "d", text: "Dentist at 3pm", done: false, children: [] }],
       },
       notes: [{ id: "n1", title: "Packing list", updated: at(now, now.getHours(), 0),
-        html: "<div>Boots, <b>gloves</b>, the good jacket.</div><h3>Gear</h3><ul><li>Skis</li><li>Poles<ul><li>Spare baskets</li></ul></li></ul>" }],
+        html: "<div>Boots, <b>gloves</b>, the good jacket.</div><div><b>Gear</b></div><ul><li>Skis</li><li>Poles<ul><li>Spare baskets</li></ul></li></ul>" }],
       settings: { theme: "dark", ics_url: "https://example.invalid/calendar.ics" },
       cache: {
         weather: { "39.550,-107.325": weather(3.2, 2), "39.369,-107.033": weather(1.5, 71) },

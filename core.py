@@ -528,7 +528,6 @@ def runs_to_html(runs):
     for line in lines:
         text = "".join(c for c, _ in line)
         is_bullet = text.startswith(BULLET)
-        is_head = bool(line) and all("h" in t for _, t in line)
         if is_bullet:
             if not in_list:
                 html.append("<ul>")
@@ -538,9 +537,7 @@ def runs_to_html(runs):
         if in_list:
             html.append("</ul>")
             in_list = False
-        if is_head:
-            html.append(f"<h3>{inline(line)}</h3>")
-        elif text:
+        if text:  # headings from the old version become normal lines (notes have no headings)
             html.append(f"<div>{inline(line)}</div>")
         else:
             html.append("<div><br></div>")

@@ -677,7 +677,7 @@ function renderBand(iso, root = document) {
 }
 
 // ---------------------------------------------------------------- NOTES
-const plain = html => { const d = document.createElement("div"); d.innerHTML = (html || "").replace(/<\/(div|h3|li|p)>|<br\s*\/?>/gi, " "); return d.textContent.replace(/\s+/g, " ").trim(); };
+const plain = html => { const d = document.createElement("div"); d.innerHTML = (html || "").replace(/<\/(div|h[1-6]|li|p)>|<br\s*\/?>/gi, " "); return d.textContent.replace(/\s+/g, " ").trim(); };
 function whenLabel(stamp) {
   if (!stamp) return ""; const d = parseLocal(stamp);
   return sameDay(d, new Date()) ? fmtTime(d) : `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}`;
@@ -724,37 +724,35 @@ function buildEditor(focusTitle = false) {
   if (!n) { ui.noteId = null; return buildNotes(); }
   const page = newPage("editor");
   $(".page-inner", page).innerHTML = `<div class="editor-bar"><button class="back" data-back>‹ &nbsp;All notes</button>
-      <button class="tool" data-cmd="bold" title="Bold (Ctrl+B)">B</button><button class="tool" data-cmd="h3" title="Heading">H</button>
+      <button class="tool" data-cmd="bold" title="Bold (Ctrl+B)">B</button>
       <button class="tool" data-cmd="list" title="Bullet list">•≡</button></div>
     <input class="note-title-input" placeholder="Title" value="${esc(n.title)}">
     <div class="note-body" contenteditable="true">${n.html || ""}</div>`;
   const title = $(".note-title-input", page), body = $(".note-body", page);
-  const changed = () => { n.title = title.value.trim(); n.html = body.innerHTML; n.updated = stamp(); clearTimeout(noteTimer); noteTimer = setTimeout(() => { noteTimer = null; save(true); }, 400); };
+  // Notes have no headings: turn any (saved earlier, or pasted in) into normal body-text lines.
+  const flattenHeadings = () => {
+    let found = false;
+    body.querySelectorAll("h1, h2, h3, h4, h5, h6").forEach(hd => {
+      const div = document.createElement("div"); div.innerHTML = hd.innerHTML || "<br>"; hd.replaceWith(div); found = true;
+    });
+    return found;
+  };
+  if (flattenHeadings()) n.html = body.innerHTML;
+  const changed = () => { flattenHeadings(); n.title = title.value.trim(); n.html = body.innerHTML; n.updated = stamp(); clearTimeout(noteTimer); noteTimer = setTimeout(() => { noteTimer = null; save(true); }, 400); };
   title.addEventListener("input", changed);
   title.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); body.focus(); } });
   body.addEventListener("input", changed);
-  const block = () => {               // the paragraph / heading / bullet the caret is in
+  const block = () => {               // the line or bullet the caret is in
     const sel = getSelection(); if (!sel.rangeCount) return null;
     let n = sel.anchorNode; if (n && n.nodeType === 3) n = n.parentNode;
-    while (n && n !== body && !/^(DIV|H3|LI|P)$/.test(n.tagName)) n = n.parentNode;
+    while (n && n !== body && !/^(DIV|LI|P)$/.test(n.tagName)) n = n.parentNode;
     return n && n !== body && body.contains(n) ? n : null;
-  };
-  const toggleHeading = () => {
-    const b = block();
-    if (b && b.tagName === "H3") {      // heading off: back to a normal body-text line
-      const div = document.createElement("div");
-      div.innerHTML = b.innerHTML || "<br>";
-      b.replaceWith(div);
-      const r = document.createRange(); r.selectNodeContents(div); r.collapse(false);
-      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
-    } else document.execCommand("formatBlock", false, "h3");
   };
   const tools = () => {
     const b = block();
     $$(".tool", page).forEach(t => {
       const c = t.dataset.cmd;
-      const on = c === "bold" ? document.queryCommandState("bold") : c === "list" ? !!(b && b.closest("li"))
-        : !!(b && b.tagName === "H3");
+      const on = c === "bold" ? document.queryCommandState("bold") : !!(b && b.closest("li"));
       t.classList.toggle("on", on && document.activeElement === body);
     });
   };
@@ -774,7 +772,6 @@ function buildEditor(focusTitle = false) {
     body.focus();
     if (t.dataset.cmd === "bold") document.execCommand("bold");
     if (t.dataset.cmd === "list") document.execCommand("insertUnorderedList");
-    if (t.dataset.cmd === "h3") toggleHeading();
     changed(); tools();
   });
   setTimeout(() => { if (focusTitle) title.focus(); }, 380);

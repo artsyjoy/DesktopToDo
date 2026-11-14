@@ -198,7 +198,6 @@ input::placeholder { color: var(--faint); }
 .note-title-input { font-weight: 700; font-size: 24px; padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
 .note-body { outline: 0; min-height: 300px; line-height: 1.5; padding-bottom: 40px; }
 .note-body:empty::before { content: "Start writing..."; color: var(--faint); }
-.note-body h3 { font-weight: 600; font-size: 19px; margin: 12px 0 4px; }
 .note-body ul { margin: 2px 0; padding-left: 22px; }
 .note-body ul ul { list-style: circle; margin: 0; }
 .note-body ul ul ul { list-style: square; }

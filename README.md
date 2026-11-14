@@ -18,7 +18,7 @@ A to-do list, notes and "at a glance" dashboard that lives on your Windows deskt
 ## Notes tab
 
 - **+ NEW** starts a note. Notes save as you type.
-- Toolbar: **B** bold (or Ctrl+B), **H** heading, **•≡** bullet list.
+- Toolbar: **B** bold (or Ctrl+B) and **•≡** bullet list. **Tab** nests a bullet, **Shift+Tab** un-nests it.
 - In a bullet list, Enter starts the next bullet. Enter on an empty bullet (or Backspace right after the bullet) ends the list.
 
 ## At a glance tab (opens first)
