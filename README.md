@@ -1,6 +1,6 @@
 # DeskTodo
 
-A weekly to-do list and notes app that lives on your Windows desktop. No website, no account, no internet.
+A to-do list, notes and "at a glance" dashboard that lives on your Windows desktop. No website, no account.
 
 ## To-do tab
 
@@ -21,6 +21,17 @@ A weekly to-do list and notes app that lives on your Windows desktop. No website
 - Toolbar: **B** bold (or Ctrl+B), **H** heading, **•≡** bullet list.
 - In a bullet list, Enter starts the next bullet. Enter on an empty bullet (or Backspace right after the bullet) ends the list.
 
+## At a glance tab
+
+- A big clock (12h / 24h toggle) with today's date and sunrise/sunset.
+- Weather for two places (Glenwood Springs and Basalt, CO to start). Click **···** on a weather card
+  to change the city, switch °F/°C, or refresh. Weather comes from open-meteo.com (free, no account).
+- **Up next:** your upcoming Outlook meetings for the next week, with a one-line brief of today
+  ("Today: 2 events · 3 tasks left").
+  Click **+ CONNECT OUTLOOK** and follow the 3 steps: in Outlook on the web, *Settings → Calendar →
+  Shared calendars → Publish a calendar*, then paste the **ICS** link. Refreshes every 10 minutes.
+- **Today's tasks:** tick them off right from here; click **OPEN ›** to jump to the To-do tab.
+
 ## Everywhere
 
 - DeskTodo looks like a desktop widget: no title bar. **Drag the top bar** (the empty space next to the tabs)
@@ -28,16 +39,20 @@ A weekly to-do list and notes app that lives on your Windows desktop. No website
 - **Right-click the top bar** for: keep on top, show/hide the normal window frame, close.
 - Moon / sun icon: switch between light and dark themes.
 - **PIN** keeps the window on top of other windows (Ctrl+T).
-- Ctrl+1 / Ctrl+2 switch between To-do and Notes.
-- Everything is saved to `%APPDATA%\DeskTodo\data.json`. Tasks from the first version of DeskTodo are imported automatically.
+- Ctrl+1 / Ctrl+2 / Ctrl+3 switch between To-do, Notes and At a glance.
+- Everything (tasks, notes, settings, last weather) is saved to `%APPDATA%\DeskTodo\data.json` as you go,
+  so closing and reopening the app — or replacing the .exe with a new version — keeps all of it.
 
 ## Get it running
 
 **Option A — the .exe (no install needed).**
 Every push builds `DeskTodo.exe` with GitHub Actions. Open the repo's **Actions** tab →
 latest "Build DeskTodo for Windows" run → download **DeskTodo-windows** under *Artifacts*,
-unzip it, and run `DeskTodo.exe`. Windows SmartScreen may warn because the exe isn't signed:
-click *More info → Run anyway*.
+unzip it, and run `DeskTodo.exe`.
+
+To avoid the "Windows protected your PC" warning: before unzipping, right-click the downloaded zip →
+**Properties** → tick **Unblock** → OK. (The warning appears because the app isn't code-signed;
+see "Code signing" below.)
 
 **Option B — with Python.**
 Install Python from python.org (tick "Add to PATH"), then double-click `desktodo.pyw`.
@@ -52,3 +67,13 @@ Press **Win+R**, type `shell:startup`, Enter. Right-click `DeskTodo.exe` (or `de
 
 Uses the [Barlow](https://github.com/jpt/barlow) typeface by The Barlow Project Authors,
 licensed under the SIL Open Font License (see `fonts/OFL.txt`).
+
+## Code signing (removing the warning for everyone)
+
+Windows shows "Windows protected your PC / Unknown publisher" for any program that isn't digitally
+signed by a verified publisher. Ways to get rid of it properly:
+
+- **Azure Trusted Signing** (Microsoft's signing service, about $10/month). After identity verification,
+  the build can sign `DeskTodo.exe` automatically.
+- **Microsoft Store**: publishing there is free for individual developers, and Store installs don't warn.
+- A traditional code-signing certificate from a certificate authority (usually a few hundred dollars a year).

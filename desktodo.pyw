@@ -1,7 +1,8 @@
 """
 DeskTodo - a weekly to-do list and notes app for your Windows desktop.
 
-Pure Python standard library (tkinter). No internet, no accounts.
+Pure Python standard library (tkinter). No accounts. The only internet use is
+weather (open-meteo.com) and, if you connect it, your Outlook calendar link.
 Everything is saved automatically to %APPDATA%\\DeskTodo\\data.json.
 
 To-do tab
@@ -18,17 +19,27 @@ Notes tab
   Toolbar: B, bullet list, heading
   Enter on an empty bullet     ends the list
 
+At a glance tab
+  Big clock, weather for two cities (click "..." on a card to change city or units),
+  upcoming Outlook meetings (via your calendar's published ICS link) and today's tasks.
+
 Anywhere
-  Ctrl+1 / Ctrl+2              switch to To-do / Notes
+  Ctrl+1 / 2 / 3               switch to To-do / Notes / At a glance
   Ctrl+T                       keep window on top
 """
 
 import json
 import os
+import queue
+import re
 import sys
+import threading
 import tkinter as tk
+import urllib.parse
+import urllib.request
 import uuid
-from datetime import date, datetime, timedelta
+import webbrowser
+from datetime import date, datetime, timedelta, timezone
 from tkinter import font as tkfont
 from tkinter import messagebox
 
@@ -126,14 +137,22 @@ THEMES = {
     "light": {
         "bg": "#e8e8e8", "text": "#3a3a3a", "muted": "#8d8d8d", "faint": "#b3b3b3",
         "line": "#cfcfcf", "accent": "#f2551d", "check": "#ffffff", "field": "#e8e8e8",
-        "chip": "#d9d9d9", "sel": "#f7c3ae",
+        "chip": "#d9d9d9", "sel": "#f7c3ae", "card": "#f5f5f5", "on_accent": "#ffffff",
+        "on_accent_muted": "#ffd9cb",
     },
     "dark": {
         "bg": "#3c3c3c", "text": "#f1f1f1", "muted": "#a6a6a6", "faint": "#777777",
         "line": "#545454", "accent": "#f2551d", "check": "#ffffff", "field": "#3c3c3c",
-        "chip": "#4b4b4b", "sel": "#7a3a22",
+        "chip": "#4b4b4b", "sel": "#7a3a22", "card": "#474747", "on_accent": "#ffffff",
+        "on_accent_muted": "#ffd9cb",
     },
 }
+
+# Design tokens shared by every screen, so the whole widget feels like one system.
+PAD = 22        # outer padding left/right
+GAP = 10        # space between cards
+RADIUS = 16     # card corner radius
+CARD_PAD = 16   # padding inside cards
 
 
 def setup_fonts(root):
@@ -175,6 +194,8 @@ def setup_fonts(root):
         "small_b": F(root, family=semi, size=9, weight=semi_w),
         "note_title": F(root, family=semi, size=12, weight=semi_w),
         "icon": F(root, family=body, size=14),
+        "clock": F(root, family=heavy, size=56, weight=heavy_w),
+        "temp": F(root, family=heavy, size=30, weight=heavy_w),
     }
 
 
@@ -267,6 +288,46 @@ def menu(root, colors, items):
     return m
 
 
+def round_rect(canvas, x1, y1, x2, y2, r, **kw):
+    pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+           x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+    return canvas.create_polygon(pts, smooth=True, **kw)
+
+
+class Card(tk.Canvas):
+    """A rounded card. Put widgets in .inner (its background is .fill)."""
+
+    def __init__(self, master, outer, fill, pad=CARD_PAD, radius=RADIUS, cursor=""):
+        super().__init__(master, bg=outer, highlightthickness=0, bd=0, height=10, width=10, cursor=cursor)
+        self.fill, self.pad, self.radius = fill, pad, radius
+        self.inner = tk.Frame(self, bg=fill, cursor=cursor)
+        self.win = self.create_window(pad, pad, window=self.inner, anchor="nw")
+        self.bind("<Configure>", self._layout)
+        self.inner.bind("<Configure>", self._fit)
+
+    def _fit(self, _e=None):
+        h = self.inner.winfo_reqheight() + 2 * self.pad
+        if int(float(self.cget("height"))) != h:
+            self.config(height=h)
+
+    def _layout(self, e):
+        self.delete("bg")
+        round_rect(self, 0, 0, e.width - 1, e.height - 1, self.radius, fill=self.fill, outline="", tags="bg")
+        self.tag_lower("bg")
+        self.itemconfigure(self.win, width=max(10, e.width - 2 * self.pad))
+        self._fit()
+
+
+def pill(parent, text, command, colors, fonts, primary=True, bg=None):
+    """Small rounded-looking button used everywhere (same look as + NEW)."""
+    C = colors
+    lbl = tk.Label(parent, text=text, font=fonts["small_b"], padx=12, pady=5, cursor="hand2",
+                   bg=C["accent"] if primary else (bg or C["chip"]),
+                   fg=C["on_accent"] if primary else C["text"])
+    lbl.bind("<Button-1>", lambda e: command())
+    return lbl
+
+
 # =========================================================================== app
 
 
@@ -280,10 +341,14 @@ class App:
 
         self.F = setup_fonts(root)
         self.tab = self.settings.get("tab", "todo")
+        if self.tab not in self.VIEWS:
+            self.tab = "todo"
         self.view = None
+        self.q = queue.Queue()
+        self.set_icon(root)
 
         root.title(APP_NAME)
-        root.minsize(320, 420)
+        root.minsize(360, 420)
         root.geometry(self.safe_geometry(self.settings.get("geometry", "400x720")))
         root.attributes("-topmost", bool(self.settings.get("on_top", False)))
         root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -296,10 +361,70 @@ class App:
         root.bind("<Control-t>", lambda e: self.toggle_on_top())
         root.bind("<Control-Key-1>", lambda e: self.switch("todo"))
         root.bind("<Control-Key-2>", lambda e: self.switch("notes"))
+        root.bind("<Control-Key-3>", lambda e: self.switch("glance"))
 
         self.build()
         self.persist()
         self.root.after(15_000, self._tick)
+        self.root.after(150, self._poll)
+
+    VIEWS = ("todo", "notes", "glance")
+    TAB_LABELS = {"todo": "TO-DO", "notes": "NOTES", "glance": "AT A GLANCE"}
+
+    @staticmethod
+    def set_icon(win):
+        assets = os.path.join(resource_dir(), "assets")
+        try:
+            if sys.platform == "win32" and os.path.exists(os.path.join(assets, "desktodo.ico")):
+                win.iconbitmap(default=os.path.join(assets, "desktodo.ico"))
+            elif os.path.exists(os.path.join(assets, "desktodo.png")):
+                win._icon = tk.PhotoImage(file=os.path.join(assets, "desktodo.png"))
+                win.iconphoto(True, win._icon)
+        except tk.TclError:
+            pass
+
+    # ---- background work (network) ---------------------------------------------------
+
+    def run_bg(self, work, done):
+        """Run work() on a thread; call done(result, error) back on the UI thread."""
+        def runner():
+            try:
+                res, err = work(), None
+            except Exception as exc:  # network errors, bad data, ...
+                res, err = None, exc
+            self.q.put(lambda: done(res, err))
+        threading.Thread(target=runner, daemon=True).start()
+
+    def _poll(self):
+        while True:
+            try:
+                job = self.q.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                job()
+            except Exception:
+                pass
+        self.root.after(150, self._poll)
+
+    def dialog(self, title, width=360):
+        """A small window in the app's style. Returns (window, body frame)."""
+        C, F = self.C, self.F
+        d = tk.Toplevel(self.root)
+        d.title(title)
+        d.configure(bg=C["bg"])
+        d.resizable(False, False)
+        self.set_icon(d)
+        if self.settings.get("on_top"):
+            d.attributes("-topmost", True)
+        d.geometry(f"+{self.root.winfo_rootx() + 16}+{self.root.winfo_rooty() + 70}")
+        body = tk.Frame(d, bg=C["bg"], width=width)
+        body.pack(fill="both", expand=True, padx=PAD, pady=(18, 20))
+        tk.Frame(body, width=width - 2 * PAD, height=0, bg=C["bg"]).pack()  # fixes the dialog's width
+        tk.Label(body, text=title.upper(), font=F["tab"], fg=C["text"], bg=C["bg"]).pack(anchor="w", pady=(0, 10))
+        d.bind("<Escape>", lambda e: d.destroy())
+        d.after(50, d.focus_force)
+        return d, body
 
     # ---- widget mode (no title bar) -----------------------------------------------
 
@@ -414,10 +539,11 @@ class App:
             close.bind("<Button-1>", lambda e: self.on_close())
             close.bind("<Enter>", lambda e: close.config(fg=C["accent"]))
             close.bind("<Leave>", lambda e: close.config(fg=C["faint"]))
-        for key, label in (("todo", "TO-DO"), ("notes", "NOTES")):
+        for key in self.VIEWS:
+            label = self.TAB_LABELS[key]
             on = key == self.tab
             box = tk.Frame(top, bg=C["bg"])
-            box.pack(side="left", padx=(0, 18))
+            box.pack(side="left", padx=(0, 16))
             lbl = tk.Label(box, text=label, font=self.F["tab"], bg=C["bg"], cursor="hand2",
                            fg=C["text"] if on else C["faint"])
             lbl.pack()
@@ -461,7 +587,7 @@ class App:
 
         self.body = tk.Frame(self.root, bg=C["bg"])
         self.body.pack(fill="both", expand=True)
-        self.view = (TodoView if self.tab == "todo" else NotesView)(self, self.body)
+        self.view = {"todo": TodoView, "notes": NotesView, "glance": GlanceView}[self.tab](self, self.body)
 
 
     def switch(self, tab):
@@ -505,7 +631,7 @@ class App:
             self.today = today_iso()
             roll_over(self.data)
             self.persist()
-            if self.tab == "todo":
+            if self.tab in ("todo", "glance"):
                 self.leaving()
                 self.build()
         self.root.after(15_000, self._tick)
@@ -859,6 +985,872 @@ class TodoView:
         m.tk_popup(e.x_root, e.y_root)
 
 
+# =========================================================================== online services
+# Weather: open-meteo.com (free, no key). Calendar: an Outlook "published calendar" ICS link.
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
+
+USER_AGENT = "DeskTodo/1.0 (desktop to-do widget)"
+
+
+def http_get(url, timeout=20):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode("utf-8", errors="replace")
+
+
+WEATHER_CODES = {
+    0: ("Clear", "clear"), 1: ("Mostly clear", "clear"), 2: ("Partly cloudy", "partly"), 3: ("Cloudy", "cloud"),
+    45: ("Fog", "fog"), 48: ("Freezing fog", "fog"),
+    51: ("Light drizzle", "rain"), 53: ("Drizzle", "rain"), 55: ("Heavy drizzle", "rain"),
+    56: ("Freezing drizzle", "rain"), 57: ("Freezing drizzle", "rain"),
+    61: ("Light rain", "rain"), 63: ("Rain", "rain"), 65: ("Heavy rain", "rain"),
+    66: ("Freezing rain", "rain"), 67: ("Freezing rain", "rain"),
+    71: ("Light snow", "snow"), 73: ("Snow", "snow"), 75: ("Heavy snow", "snow"), 77: ("Snow grains", "snow"),
+    80: ("Showers", "rain"), 81: ("Showers", "rain"), 82: ("Heavy showers", "rain"),
+    85: ("Snow showers", "snow"), 86: ("Snow showers", "snow"),
+    95: ("Thunderstorm", "storm"), 96: ("Storm & hail", "storm"), 99: ("Storm & hail", "storm"),
+}
+
+DEFAULT_CITIES = [
+    {"name": "Glenwood Springs", "region": "Colorado", "lat": 39.5505, "lon": -107.3248},
+    {"name": "Basalt", "region": "Colorado", "lat": 39.3689, "lon": -107.0328},
+]
+
+
+def city_key(c):
+    return f"{c['lat']:.3f},{c['lon']:.3f}"
+
+
+def fetch_weather(lat, lon):
+    q = urllib.parse.urlencode({
+        "latitude": lat, "longitude": lon, "timezone": "auto", "forecast_days": 1,
+        "current": "temperature_2m,apparent_temperature,weather_code,is_day",
+        "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset",
+    })
+    j = json.loads(http_get("https://api.open-meteo.com/v1/forecast?" + q))
+    cur, d = j["current"], j["daily"]
+    return {"temp": cur["temperature_2m"], "feels": cur["apparent_temperature"], "code": cur["weather_code"],
+            "is_day": cur.get("is_day", 1), "hi": d["temperature_2m_max"][0], "lo": d["temperature_2m_min"][0],
+            "sunrise": d["sunrise"][0], "sunset": d["sunset"][0],
+            "fetched": datetime.now().isoformat(timespec="seconds")}
+
+
+def geocode(text):
+    """'Aspen, CO' -> list of places, best matches first."""
+    name, _, hint = text.partition(",")
+    q = urllib.parse.urlencode({"name": name.strip(), "count": 10, "language": "en", "format": "json"})
+    j = json.loads(http_get("https://geocoding-api.open-meteo.com/v1/search?" + q))
+    out = []
+    for r in j.get("results", []):
+        out.append({"name": r["name"], "region": r.get("admin1") or r.get("country", ""),
+                    "country": r.get("country", ""), "cc": r.get("country_code", ""),
+                    "lat": r["latitude"], "lon": r["longitude"]})
+    hint = hint.strip().lower()
+    if hint:
+        abbr = US_STATES.get(hint.upper(), "").lower()
+
+        def score(p):
+            fields = [p["region"].lower(), p["country"].lower(), p["cc"].lower()]
+            return 0 if any(hint == f or hint in f or (abbr and abbr == f) for f in fields) else 1
+        out.sort(key=score)
+    return out
+
+
+US_STATES = dict(zip(
+    "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK "
+    "OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC".split(),
+    ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "Florida",
+     "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine",
+     "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska",
+     "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
+     "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas",
+     "Utah", "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming", "District of Columbia"]))
+
+# Outlook writes Windows time zone names into its calendar files.
+WIN_TZ = {
+    "Mountain Standard Time": "America/Denver", "US Mountain Standard Time": "America/Phoenix",
+    "Pacific Standard Time": "America/Los_Angeles", "Central Standard Time": "America/Chicago",
+    "Eastern Standard Time": "America/New_York", "US Eastern Standard Time": "America/Indiana/Indianapolis",
+    "Alaskan Standard Time": "America/Anchorage", "Hawaiian Standard Time": "Pacific/Honolulu",
+    "Atlantic Standard Time": "America/Halifax", "Newfoundland Standard Time": "America/St_Johns",
+    "Canada Central Standard Time": "America/Regina", "Mexico Standard Time": "America/Mexico_City",
+    "Central Standard Time (Mexico)": "America/Mexico_City", "SA Pacific Standard Time": "America/Bogota",
+    "E. South America Standard Time": "America/Sao_Paulo", "GMT Standard Time": "Europe/London",
+    "Greenwich Standard Time": "Atlantic/Reykjavik", "W. Europe Standard Time": "Europe/Berlin",
+    "Romance Standard Time": "Europe/Paris", "Central Europe Standard Time": "Europe/Budapest",
+    "Central European Standard Time": "Europe/Warsaw", "GTB Standard Time": "Europe/Bucharest",
+    "FLE Standard Time": "Europe/Kiev", "Russian Standard Time": "Europe/Moscow",
+    "Israel Standard Time": "Asia/Jerusalem", "South Africa Standard Time": "Africa/Johannesburg",
+    "Arabian Standard Time": "Asia/Dubai", "India Standard Time": "Asia/Kolkata",
+    "Singapore Standard Time": "Asia/Singapore", "China Standard Time": "Asia/Shanghai",
+    "Tokyo Standard Time": "Asia/Tokyo", "Korea Standard Time": "Asia/Seoul",
+    "AUS Eastern Standard Time": "Australia/Sydney", "New Zealand Standard Time": "Pacific/Auckland",
+    "UTC": "UTC", "Coordinated Universal Time": "UTC",
+}
+
+
+def get_tz(tzid):
+    if not tzid or ZoneInfo is None:
+        return None
+    tzid = tzid.strip('"')
+    for name in (WIN_TZ.get(tzid), tzid):
+        if name:
+            try:
+                return ZoneInfo(name)
+            except Exception:
+                pass
+    return None  # unknown zone: treat times as local
+
+
+def ics_line(line):
+    inq = False
+    for i, ch in enumerate(line):
+        if ch == '"':
+            inq = not inq
+        elif ch == ":" and not inq:
+            head, value = line[:i], line[i + 1:]
+            break
+    else:
+        return None
+    parts = head.split(";")
+    params = {}
+    for p in parts[1:]:
+        k, _, v = p.partition("=")
+        params[k.upper()] = v.strip('"')
+    return parts[0].upper(), params, value
+
+
+def ics_dt(value, params):
+    """-> (naive wall-clock datetime, tz or None, all_day)"""
+    v = value.strip()
+    if params.get("VALUE") == "DATE" or len(v) == 8:
+        return datetime.strptime(v[:8], "%Y%m%d"), None, True
+    dt = datetime.strptime(v[:15], "%Y%m%dT%H%M%S")
+    if v.endswith("Z"):
+        return dt, timezone.utc, False
+    return dt, get_tz(params.get("TZID")), False
+
+
+def to_local(naive, tz):
+    if tz is None:
+        return naive
+    return naive.replace(tzinfo=tz).astimezone().replace(tzinfo=None)
+
+
+def ics_text(v):
+    return (v.replace("\\n", " ").replace("\\N", " ").replace("\\,", ",")
+            .replace("\\;", ";").replace("\\\\", "\\").strip())
+
+
+def ics_duration(v):
+    m = re.match(r"([+-])?P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", v or "")
+    if not m:
+        return timedelta(0)
+    w, d, h, mi, s = (int(x or 0) for x in m.groups()[1:])
+    return timedelta(weeks=w, days=d, hours=h, minutes=mi, seconds=s)
+
+
+WEEKDAYS = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
+
+
+def add_months(y, m, n):
+    m0 = m - 1 + n
+    return y + m0 // 12, m0 % 12 + 1
+
+
+def days_in_month(y, m):
+    y2, m2 = add_months(y, m, 1)
+    return (date(y2, m2, 1) - date(y, m, 1)).days
+
+
+def expand_rrule(start, rule, tz, limit):
+    """Yield occurrence start times (naive, in the event's own time zone) up to `limit`."""
+    r = dict(p.split("=", 1) for p in rule.split(";") if "=" in p)
+    freq = r.get("FREQ", "")
+    interval = max(1, int(r.get("INTERVAL", 1)))
+    count = int(r["COUNT"]) if "COUNT" in r else None
+    until = None
+    if "UNTIL" in r:
+        u = r["UNTIL"]
+        if "T" in u:
+            until = datetime.strptime(u[:15], "%Y%m%dT%H%M%S")
+            if u.endswith("Z") and tz is not None:
+                until = until.replace(tzinfo=timezone.utc).astimezone(tz).replace(tzinfo=None)
+            elif u.endswith("Z"):
+                until = until.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+        else:
+            until = datetime.strptime(u[:8], "%Y%m%d").replace(hour=23, minute=59, second=59)
+    byday = [d.strip() for d in r.get("BYDAY", "").split(",") if d.strip()]
+    bymonthday = [int(x) for x in r.get("BYMONTHDAY", "").split(",") if x.strip()]
+    t = start.time()
+
+    def candidates():
+        k = 0
+        while True:
+            if freq == "DAILY":
+                yield [start + timedelta(days=k * interval)]
+            elif freq == "WEEKLY":
+                wds = sorted({WEEKDAYS[d[-2:]] for d in byday if d[-2:] in WEEKDAYS}) or [start.weekday()]
+                week0 = start - timedelta(days=start.weekday())
+                base = week0 + timedelta(weeks=k * interval)
+                yield [base + timedelta(days=wd) for wd in wds]
+            elif freq == "MONTHLY":
+                y, m = add_months(start.year, start.month, k * interval)
+                n = days_in_month(y, m)
+                days = []
+                if byday:
+                    for spec in byday:
+                        wd = WEEKDAYS.get(spec[-2:])
+                        if wd is None:
+                            continue
+                        nth = int(spec[:-2] or 0)
+                        all_days = [d for d in range(1, n + 1) if date(y, m, d).weekday() == wd]
+                        if nth == 0:
+                            days += all_days
+                        elif -len(all_days) <= nth <= len(all_days) and nth != 0:
+                            days.append(all_days[nth - 1] if nth > 0 else all_days[nth])
+                else:
+                    for md in (bymonthday or [start.day]):
+                        d = md if md > 0 else n + 1 + md
+                        if 1 <= d <= n:
+                            days.append(d)
+                yield [datetime.combine(date(y, m, d), t) for d in sorted(set(days))]
+            elif freq == "YEARLY":
+                y = start.year + k * interval
+                try:
+                    yield [datetime.combine(date(y, start.month, start.day), t)]
+                except ValueError:
+                    yield []
+            else:
+                yield [start]
+                return
+            k += 1
+
+    n = 0
+    for batch in candidates():
+        if n > 3000:
+            return
+        stop = False
+        for dt in batch:
+            if dt < start:
+                continue
+            if (until and dt > until) or dt > limit:
+                stop = True
+                break
+            n += 1
+            if count is not None and n > count:
+                return
+            yield dt
+        if stop:
+            return
+        if freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
+            return
+
+
+def parse_ics(text, win_start, win_end):
+    """Events overlapping [win_start, win_end) as dicts with local start/end."""
+    raw = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = []
+    for ln in raw:
+        if ln[:1] in (" ", "\t") and lines:
+            lines[-1] += ln[1:]
+        elif ln:
+            lines.append(ln)
+    events, cur, in_alarm = [], None, False
+    for ln in lines:
+        up = ln.upper()
+        if up == "BEGIN:VEVENT":
+            cur, in_alarm = {"EXDATE": []}, False
+        elif up == "END:VEVENT":
+            if cur is not None:
+                events.append(cur)
+            cur = None
+        elif cur is not None:
+            if up == "BEGIN:VALARM":
+                in_alarm = True
+            elif up == "END:VALARM":
+                in_alarm = False
+            elif not in_alarm:
+                p = ics_line(ln)
+                if not p:
+                    continue
+                name, params, value = p
+                if name == "EXDATE":
+                    for v in value.split(","):
+                        cur["EXDATE"].append((v, params))
+                else:
+                    cur[name] = (value, params)
+
+    overrides = set()
+    for ev in events:
+        if "RECURRENCE-ID" in ev:
+            rid, tz, _ = ics_dt(*ev["RECURRENCE-ID"])
+            overrides.add((ev.get("UID", ("", {}))[0], to_local(rid, tz)))
+
+    out = []
+    for ev in events:
+        if "DTSTART" not in ev:
+            continue
+        if ev.get("STATUS", ("", {}))[0].upper() == "CANCELLED":
+            continue
+        uid = ev.get("UID", ("", {}))[0]
+        title = ics_text(ev.get("SUMMARY", ("(No title)", {}))[0]) or "(No title)"
+        if title.lower().startswith("canceled:") or title.lower().startswith("cancelled:"):
+            continue
+        location = ics_text(ev.get("LOCATION", ("", {}))[0])
+        start, tz, all_day = ics_dt(*ev["DTSTART"])
+        if "DTEND" in ev:
+            end, _, _ = ics_dt(*ev["DTEND"])
+            dur = end - start
+        elif "DURATION" in ev:
+            dur = ics_duration(ev["DURATION"][0])
+        else:
+            dur = timedelta(days=1) if all_day else timedelta(0)
+        exdates = set()
+        for v, p in ev["EXDATE"]:
+            try:
+                xd, xtz, xall = ics_dt(v, p)
+                exdates.add(xd if xall else to_local(xd, xtz))
+            except ValueError:
+                pass
+        is_override = "RECURRENCE-ID" in ev
+        if "RRULE" in ev and not is_override:
+            starts = expand_rrule(start, ev["RRULE"][0], tz, win_end + timedelta(days=2))
+        else:
+            starts = [start]
+        for s in starts:
+            local = s if all_day else to_local(s, tz)
+            if local in exdates or (all_day and s in exdates):
+                continue
+            if not is_override and (uid, local) in overrides:
+                continue
+            local_end = (s + dur) if all_day else to_local(s + dur, tz)
+            if local_end <= local:
+                local_end = local + (timedelta(days=1) if all_day else timedelta(minutes=1))
+            if local_end > win_start and local < win_end:
+                out.append({"start": local.isoformat(), "end": local_end.isoformat(),
+                            "title": title, "location": location, "all_day": all_day})
+    out.sort(key=lambda e: (e["start"], not e["all_day"]))
+    return out
+
+
+def fetch_events(url):
+    url = url.strip()
+    if url.lower().startswith("webcal://"):
+        url = "https://" + url[9:]
+    text = http_get(url, timeout=30)
+    if "BEGIN:VCALENDAR" not in text[:2000].upper():
+        raise ValueError("That link didn't return a calendar (ICS) file.")
+    today0 = datetime.combine(date.today(), datetime.min.time())
+    return parse_ics(text, today0, today0 + timedelta(days=8))
+
+
+# =========================================================================== at-a-glance tab
+
+
+def draw_weather_icon(c, kind, is_day, fg, sun):
+    c.delete("all")
+
+    def cloud(x, y, col):
+        c.create_oval(x, y + 7, x + 14, y + 19, fill=col, outline="")
+        c.create_oval(x + 6, y, x + 22, y + 16, fill=col, outline="")
+        c.create_oval(x + 14, y + 6, x + 28, y + 19, fill=col, outline="")
+        c.create_rectangle(x + 7, y + 11, x + 21, y + 19, fill=col, outline="")
+
+    def orb(x, y, r):
+        if is_day:
+            c.create_oval(x - r, y - r, x + r, y + r, fill=sun, outline="")
+        else:
+            c.create_oval(x - r, y - r, x + r, y + r, fill=fg, outline="")
+            c.create_oval(x - r + 5, y - r - 2, x + r + 5, y + r - 2, fill=c["bg"], outline="")
+
+    if kind == "clear":
+        orb(18, 16, 10)
+    elif kind == "partly":
+        orb(12, 10, 8)
+        cloud(6, 10, fg)
+    elif kind == "fog":
+        for i, y in enumerate((8, 15, 22)):
+            c.create_line(4 + 3 * (i % 2), y, 30 - 3 * (i % 2), y, fill=fg, width=3, capstyle="round")
+    else:
+        cloud(4, 2, fg)
+        if kind == "rain":
+            for x in (10, 17, 24):
+                c.create_line(x, 25, x - 3, 31, fill=fg, width=2)
+        elif kind == "snow":
+            for x in (10, 17, 24):
+                c.create_oval(x - 2, 25, x + 2, 29, fill=fg, outline="")
+        elif kind == "storm":
+            c.create_line(19, 22, 15, 28, 20, 28, 16, 34, fill=sun, width=2)
+
+
+def fmt_time(dt, h24=False):
+    if h24:
+        return dt.strftime("%H:%M")
+    return dt.strftime("%I:%M").lstrip("0") + dt.strftime("%p").lower()
+
+
+class GlanceView:
+    def __init__(self, app, parent):
+        self.app, self.C, self.F, self.root = app, app.C, app.F, app.root
+        self.settings = app.settings
+        self.settings.setdefault("cities", [dict(c) for c in DEFAULT_CITIES])
+        self.cache = app.data.setdefault("cache", {})
+        self.cache.setdefault("weather", {})
+        self.measure = self.F["clock"].copy()
+        self.measure.configure(size=100)
+        self.width = 400
+        self.scroll = ScrollArea(parent, self.C, on_width=self.on_width)
+        self.scroll.pack(fill="both", expand=True)
+        self.build()
+        self.tick()
+        self.refresh()
+
+    def alive(self):
+        try:
+            return bool(self.scroll.winfo_exists())
+        except tk.TclError:
+            return False
+
+    @property
+    def h24(self):
+        return bool(self.settings.get("clock24"))
+
+    def to_unit(self, c):
+        if c is None:
+            return "–"
+        return f"{round(c * 9 / 5 + 32) if self.settings.get('units', 'F') == 'F' else round(c)}°"
+
+    # ---- layout ----------------------------------------------------------------
+
+    def build(self):
+        for w in self.scroll.inner.winfo_children():
+            w.destroy()
+        self.wraps = []
+        C, F = self.C, self.F
+        wrap = tk.Frame(self.scroll.inner, bg=C["bg"])
+        wrap.pack(fill="x", padx=PAD, pady=(10, 24))
+
+        # clock
+        self.date_lbl = tk.Label(wrap, font=F["small_b"], fg=C["muted"], bg=C["bg"])
+        self.date_lbl.pack(anchor="w")
+        row = tk.Frame(wrap, bg=C["bg"])
+        row.pack(fill="x")
+        self.clock_lbl = tk.Label(row, font=F["clock"], fg=C["text"], bg=C["bg"], bd=0, padx=0, pady=0)
+        self.clock_lbl.pack(side="left")
+        self.ampm_lbl = tk.Label(row, font=F["tab"], fg=C["muted"], bg=C["bg"])
+        self.ampm_lbl.pack(side="left", anchor="s", pady=(0, 16), padx=(4, 0))
+
+        info = tk.Frame(wrap, bg=C["bg"])
+        info.pack(fill="x", pady=(0, GAP + 2))
+        self.sun_lbl = tk.Label(info, font=F["small"], fg=C["muted"], bg=C["bg"])
+        self.sun_lbl.pack(side="left")
+        tog = tk.Frame(info, bg=C["chip"])
+        tog.pack(side="right")
+        for label, val in (("12h", False), ("24h", True)):
+            on = self.h24 == val
+            b = tk.Label(tog, text=label, font=F["small_b"], padx=9, pady=2, cursor="hand2",
+                         bg=C["text"] if on else C["chip"], fg=C["bg"] if on else C["muted"])
+            b.pack(side="left")
+            b.bind("<Button-1>", lambda e, v=val: self.set_24(v))
+
+        # weather cards
+        grid = tk.Frame(wrap, bg=C["bg"])
+        grid.pack(fill="x")
+        grid.columnconfigure(0, weight=1, uniform="w")
+        grid.columnconfigure(1, weight=1, uniform="w")
+        for i, city in enumerate(self.settings["cities"][:2]):
+            card = self.weather_card(grid, i, city)
+            card.grid(row=0, column=i, sticky="ew", padx=(0, GAP // 2) if i == 0 else (GAP // 2, 0))
+
+        self.events_card(wrap).pack(fill="x", pady=(GAP, 0))
+        self.tasks_card(wrap).pack(fill="x", pady=(GAP, 0))
+
+        self.update_clock()
+        self.on_width(self.width)
+
+    def weather_card(self, parent, i, city):
+        C, F = self.C, self.F
+        accent = i == 0
+        fill = C["accent"] if accent else C["card"]
+        fg = C["on_accent"] if accent else C["text"]
+        mut = C["on_accent_muted"] if accent else C["muted"]
+        card = Card(parent, C["bg"], fill)
+        top = tk.Frame(card.inner, bg=fill)
+        top.pack(fill="x")
+        name = tk.Label(top, text=city["name"], font=F["small_b"], fg=fg, bg=fill, anchor="w", justify="left")
+        name.pack(side="left", fill="x", expand=True)
+        self.wraps.append((name, "half"))
+        more = tk.Label(top, text="···", font=F["tab"], fg=mut, bg=fill, cursor="hand2")
+        more.pack(side="right", anchor="n")
+        more.bind("<Button-1>", lambda e: self.city_menu(e, i))
+        tk.Label(card.inner, text=city.get("region", ""), font=F["small"], fg=mut, bg=fill).pack(anchor="w")
+
+        w = self.cache["weather"].get(city_key(city))
+        mid = tk.Frame(card.inner, bg=fill)
+        mid.pack(fill="x", pady=(8, 2))
+        tk.Label(mid, text=self.to_unit(w["temp"]) if w else "–", font=F["temp"], fg=fg, bg=fill).pack(side="left")
+        if w:
+            icon = tk.Canvas(mid, width=34, height=36, bg=fill, highlightthickness=0)
+            icon.pack(side="right", anchor="s")
+            desc, kind = WEATHER_CODES.get(int(w["code"]), ("", "cloud"))
+            draw_weather_icon(icon, kind, w.get("is_day", 1), fg, C["on_accent"] if accent else C["accent"])
+            tk.Label(card.inner, text=desc, font=F["small_b"], fg=fg, bg=fill).pack(anchor="w")
+            tk.Label(card.inner, text=f"H {self.to_unit(w['hi'])}   L {self.to_unit(w['lo'])}",
+                     font=F["small"], fg=mut, bg=fill).pack(anchor="w")
+        else:
+            tk.Label(card.inner, text="Loading weather..." if not self.cache.get("weather_error")
+                     else "Weather unavailable", font=F["small"], fg=mut, bg=fill).pack(anchor="w")
+        for wdg in (card, card.inner):
+            wdg.bind("<Button-3>", lambda e: self.city_menu(e, i))
+        return card
+
+    def events_card(self, parent):
+        C, F = self.C, self.F
+        card = Card(parent, C["bg"], C["card"])
+        head = tk.Frame(card.inner, bg=C["card"])
+        head.pack(fill="x")
+        tk.Label(head, text="UP NEXT", font=F["tab"], fg=C["text"], bg=C["card"]).pack(side="left")
+        url = self.settings.get("ics_url")
+        if url:
+            more = tk.Label(head, text="···", font=F["tab"], fg=C["muted"], bg=C["card"], cursor="hand2")
+            more.pack(side="right")
+            more.bind("<Button-1>", self.calendar_menu)
+
+        now = datetime.now()
+        events = [e for e in self.cache.get("events", []) if datetime.fromisoformat(e["end"]) > now] if url else []
+        today_left = sum(1 for e in events if datetime.fromisoformat(e["start"]).date() == now.date())
+        tasks_left = sum(1 for t in self.app.data["days"].get(today_iso(), []) if not t["done"])
+        brief = (f"Today: {today_left} event{'s' if today_left != 1 else ''} · " if url else "Today: ") + \
+            f"{tasks_left} task{'s' if tasks_left != 1 else ''} left"
+        tk.Label(card.inner, text=brief, font=F["small"], fg=C["muted"], bg=C["card"]).pack(anchor="w", pady=(2, 8))
+
+        if not url:
+            msg = tk.Label(card.inner, text="See your upcoming Outlook meetings here.", font=F["body"],
+                           fg=C["text"], bg=C["card"], justify="left", anchor="w")
+            msg.pack(fill="x")
+            self.wraps.append((msg, "full"))
+            pill(card.inner, "+ CONNECT OUTLOOK", self.connect_calendar, C, F).pack(anchor="w", pady=(10, 0))
+            return card
+
+        if self.cache.get("events_error"):
+            err = tk.Label(card.inner, text="Couldn't refresh the calendar — showing the last saved events.",
+                           font=F["small"], fg=C["accent"], bg=C["card"], justify="left", anchor="w")
+            err.pack(fill="x", pady=(0, 6))
+            self.wraps.append((err, "full"))
+        if not events:
+            tk.Label(card.inner, text="Nothing scheduled for the next week." if "events" in self.cache
+                     else "Loading calendar...", font=F["body"], fg=C["muted"], bg=C["card"]).pack(anchor="w")
+            return card
+
+        shown_day, first_group = None, False
+        for e in events[:8]:
+            s, en = datetime.fromisoformat(e["start"]), datetime.fromisoformat(e["end"])
+            d = s.date() if s > now else now.date()
+            if d != shown_day:
+                shown_day = d
+                label = "TODAY" if d == now.date() else "TOMORROW" if d == now.date() + timedelta(days=1) \
+                    else f"{d:%a} {d:%b} {d.day}".upper()
+                tk.Label(card.inner, text=label, font=F["small_b"], fg=C["muted"], bg=C["card"]).pack(
+                    anchor="w", pady=(6 if first_group else 0, 2))
+                first_group = True
+            row = tk.Frame(card.inner, bg=C["card"])
+            row.pack(fill="x", pady=2)
+            live = s <= now < en
+            when = "All day" if e["all_day"] else ("NOW" if live else fmt_time(s, self.h24))
+            tk.Label(row, text=when, font=F["small_b"], width=7, anchor="w", bg=C["card"],
+                     fg=C["accent"] if live else C["text"]).pack(side="left", anchor="n", pady=(2, 0))
+            col = tk.Frame(row, bg=C["card"])
+            col.pack(side="left", fill="x", expand=True)
+            t = tk.Label(col, text=e["title"], font=F["body"], fg=C["text"], bg=C["card"], anchor="w", justify="left")
+            t.pack(fill="x")
+            self.wraps.append((t, "event"))
+            if e.get("location"):
+                loc = tk.Label(col, text=e["location"], font=F["small"], fg=C["muted"], bg=C["card"],
+                               anchor="w", justify="left")
+                loc.pack(fill="x")
+                self.wraps.append((loc, "event"))
+        return card
+
+    def tasks_card(self, parent):
+        C, F = self.C, self.F
+        card = Card(parent, C["bg"], C["card"])
+        head = tk.Frame(card.inner, bg=C["card"], cursor="hand2")
+        head.pack(fill="x")
+        h = tk.Label(head, text="TODAY'S TASKS", font=F["tab"], fg=C["text"], bg=C["card"], cursor="hand2")
+        h.pack(side="left")
+        go = tk.Label(head, text="OPEN ›", font=F["small_b"], fg=C["muted"], bg=C["card"], cursor="hand2")
+        go.pack(side="right")
+        for w in (head, h, go):
+            w.bind("<Button-1>", lambda e: self.app.switch("todo"))
+        tasks = [t for t in self.app.data["days"].get(today_iso(), []) if not t["done"]]
+        if not tasks:
+            tk.Label(card.inner, text="Nothing left for today.", font=F["body"], fg=C["muted"],
+                     bg=C["card"]).pack(anchor="w", pady=(8, 0))
+            return card
+        box = tk.Frame(card.inner, bg=C["card"])
+        box.pack(fill="x", pady=(8, 0))
+        for t in tasks[:6]:
+            row = tk.Frame(box, bg=C["card"])
+            row.pack(fill="x", pady=2)
+            chk = tk.Canvas(row, width=17, height=17, bg=C["card"], highlightthickness=0, cursor="hand2")
+            chk.create_rectangle(1, 1, 15, 15, outline=C["muted"], width=1.4)
+            chk.pack(side="left", anchor="n", pady=(3, 0), padx=(0, 9))
+            chk.bind("<Button-1>", lambda e, task=t: self.finish_task(task))
+            sub = f"  ({sum(1 for c in t.get('children', []) if c['done'])}/{len(t['children'])})" \
+                if t.get("children") else ""
+            lbl = tk.Label(row, text=t["text"] + sub, font=F["body"], fg=C["text"], bg=C["card"],
+                           anchor="w", justify="left")
+            lbl.pack(side="left", fill="x", expand=True)
+            self.wraps.append((lbl, "task"))
+        if len(tasks) > 6:
+            tk.Label(card.inner, text=f"+ {len(tasks) - 6} more", font=F["small"], fg=C["muted"],
+                     bg=C["card"]).pack(anchor="w", pady=(4, 0))
+        return card
+
+    def on_width(self, width):
+        self.width = width
+        avail = max(150, width - 2 * PAD - (44 if not self.h24 else 0))
+        sample = "00:00:00"
+        size = int(100 * avail / max(1, self.measure.measure(sample)))
+        self.F["clock"].configure(size=max(28, min(90, size)))
+        inner = width - 2 * PAD - 2 * CARD_PAD
+        for lbl, kind in getattr(self, "wraps", []):
+            try:
+                wl = {"full": inner, "event": inner - 70, "task": inner - 30,
+                      "half": (width - 2 * PAD - GAP) // 2 - 2 * CARD_PAD - 24}[kind]
+                lbl.config(wraplength=max(60, wl))
+            except tk.TclError:
+                pass
+
+    # ---- clock -----------------------------------------------------------------
+
+    def tick(self):
+        if not self.alive():
+            return
+        self.update_clock()
+        self.root.after(1000 - datetime.now().microsecond // 1000 + 5, self.tick)
+
+    def update_clock(self):
+        now = datetime.now()
+        self.clock_lbl.config(text=now.strftime("%H:%M:%S" if self.h24 else "%I:%M:%S"))
+        self.ampm_lbl.config(text="" if self.h24 else now.strftime("%p"))
+        self.date_lbl.config(text=f"{now:%A}, {now:%B} {now.day}".upper())
+        w = self.cache["weather"].get(city_key(self.settings["cities"][0])) if self.settings["cities"] else None
+        if w and w.get("sunrise"):
+            try:
+                sr, ss = datetime.fromisoformat(w["sunrise"]), datetime.fromisoformat(w["sunset"])
+                mins = int((ss - sr).total_seconds() // 60)
+                self.sun_lbl.config(text=f"Sun  {fmt_time(sr, self.h24)} – {fmt_time(ss, self.h24)}"
+                                         f"  ({mins // 60}h {mins % 60:02d}m)")
+            except ValueError:
+                pass
+
+    def set_24(self, v):
+        self.settings["clock24"] = v
+        self.app.persist()
+        self.build()
+
+    # ---- data refresh ------------------------------------------------------------
+
+    def refresh(self, force=False):
+        if not self.alive():
+            return
+        now = datetime.now()
+
+        def stale(stamp, minutes):
+            return force or not stamp or now - datetime.fromisoformat(stamp) > timedelta(minutes=minutes)
+
+        for city in self.settings["cities"][:2]:
+            k = city_key(city)
+            if stale(self.cache["weather"].get(k, {}).get("fetched"), 15):
+                self.app.run_bg(lambda c=city: fetch_weather(c["lat"], c["lon"]),
+                                lambda res, err, k=k: self.got_weather(k, res, err))
+        url = self.settings.get("ics_url")
+        if url and stale(self.cache.get("events_fetched"), 10):
+            self.app.run_bg(lambda: fetch_events(url), self.got_events)
+        self.root.after(5 * 60 * 1000, self.refresh)
+
+    def got_weather(self, key, res, err):
+        if err is None:
+            self.cache["weather"][key] = res
+            self.cache.pop("weather_error", None)
+        else:
+            self.cache["weather_error"] = str(err)
+        self.app.persist()
+        if self.alive():
+            self.build()
+
+    def got_events(self, res, err):
+        if err is None:
+            self.cache["events"] = res
+            self.cache.pop("events_error", None)
+        else:
+            self.cache["events_error"] = str(err)
+        self.cache["events_fetched"] = datetime.now().isoformat(timespec="seconds")
+        self.app.persist()
+        if self.alive():
+            self.build()
+
+    def finish_task(self, task):
+        task["done"] = True
+        for c in task.get("children", []):
+            c["done"] = True
+        self.app.persist()
+        self.build()
+
+    # ---- menus & dialogs -----------------------------------------------------------
+
+    def city_menu(self, e, i):
+        units = self.settings.get("units", "F")
+        items = [("Change city...", lambda: self.change_city(i)),
+                 (f"Show °{'C' if units == 'F' else 'F'}", self.toggle_units),
+                 (None, None), ("Refresh weather", lambda: self.refresh(force=True))]
+        menu(self.root, self.C, items).tk_popup(e.x_root, e.y_root)
+
+    def toggle_units(self):
+        self.settings["units"] = "C" if self.settings.get("units", "F") == "F" else "F"
+        self.app.persist()
+        self.build()
+
+    def change_city(self, i):
+        C, F = self.C, self.F
+        d, body = self.app.dialog("Change city")
+        tk.Label(body, text="Type a town or city, e.g. “Aspen, CO”", font=F["small"],
+                 fg=C["muted"], bg=C["bg"]).pack(anchor="w")
+        field = Card(body, C["bg"], C["card"], pad=10, radius=12)
+        field.pack(fill="x", pady=(6, 8))
+        entry = tk.Entry(field.inner, font=F["body"], bg=C["card"], fg=C["text"], insertbackground=C["text"],
+                         relief="flat", bd=0, highlightthickness=0)
+        entry.pack(fill="x")
+        status = tk.Label(body, font=F["small"], fg=C["muted"], bg=C["bg"])
+        status.pack(anchor="w")
+        results = tk.Frame(body, bg=C["bg"])
+        results.pack(fill="x", pady=(4, 0))
+
+        def pick(place):
+            self.settings["cities"][i] = {k: place[k] for k in ("name", "region", "lat", "lon")}
+            self.app.persist()
+            d.destroy()
+            self.build()
+            self.refresh(force=True)
+
+        def show(res, err):
+            if not d.winfo_exists():
+                return
+            for w in results.winfo_children():
+                w.destroy()
+            if err:
+                status.config(text="Couldn't search. Are you online?")
+                return
+            if not res:
+                status.config(text="No places found. Try another spelling.")
+                return
+            status.config(text="Choose one:")
+            for place in res[:6]:
+                where = ", ".join(x for x in (place["region"], place["country"]) if x and x != place["name"])
+                lbl = tk.Label(results, text=f"{place['name']}  ·  {where}", font=F["body"], fg=C["text"],
+                               bg=C["bg"], anchor="w", cursor="hand2", pady=3)
+                lbl.pack(fill="x")
+                lbl.bind("<Button-1>", lambda e, p=place: pick(p))
+                lbl.bind("<Enter>", lambda e, w=lbl: w.config(fg=C["accent"]))
+                lbl.bind("<Leave>", lambda e, w=lbl: w.config(fg=C["text"]))
+
+        def search():
+            q = entry.get().strip()
+            if q:
+                status.config(text="Searching...")
+                self.app.run_bg(lambda: geocode(q), show)
+
+        entry.bind("<Return>", lambda e: search())
+        d.search, d.entry = search, entry
+        btns = tk.Frame(body, bg=C["bg"])
+        btns.pack(fill="x", pady=(12, 0))
+        pill(btns, "SEARCH", search, C, F).pack(side="left")
+        pill(btns, "CANCEL", d.destroy, C, F, primary=False).pack(side="left", padx=(8, 0))
+        entry.focus_set()
+
+    def calendar_menu(self, e):
+        items = [("Refresh calendar", lambda: self.refresh(force=True)),
+                 ("Change calendar link...", self.connect_calendar),
+                 (None, None), ("Disconnect calendar", self.disconnect_calendar)]
+        menu(self.root, self.C, items).tk_popup(e.x_root, e.y_root)
+
+    def disconnect_calendar(self):
+        self.settings.pop("ics_url", None)
+        for k in ("events", "events_fetched", "events_error"):
+            self.cache.pop(k, None)
+        self.app.persist()
+        self.build()
+
+    def connect_calendar(self):
+        C, F = self.C, self.F
+        d, body = self.app.dialog("Connect Outlook calendar", width=380)
+
+        def text(t, color=None, font=None, pady=(0, 6)):
+            lbl = tk.Label(body, text=t, font=font or F["small"], fg=color or C["text"], bg=C["bg"],
+                           justify="left", anchor="w", wraplength=330)
+            lbl.pack(fill="x", pady=pady)
+            return lbl
+
+        def link(t, url):
+            lbl = tk.Label(body, text=t + "  ↗", font=F["small_b"], fg=C["accent"], bg=C["bg"],
+                           cursor="hand2", anchor="w")
+            lbl.pack(fill="x", pady=(0, 4))
+            lbl.bind("<Button-1>", lambda e: webbrowser.open(url))
+
+        text("1.  Open your Outlook calendar settings in the browser:")
+        link("Work or school account", "https://outlook.office.com/calendar/options/calendar/SharedCalendars")
+        link("Personal account (Outlook.com / Hotmail)",
+             "https://outlook.live.com/calendar/0/options/calendar/SharedCalendars")
+        text("2.  Under “Publish a calendar”, choose your calendar and “Can view all details”, "
+             "then click Publish.", pady=(6, 6))
+        text("3.  Copy the ICS link and paste it here:")
+        field = Card(body, C["bg"], C["card"], pad=10, radius=12)
+        field.pack(fill="x", pady=(2, 6))
+        entry = tk.Entry(field.inner, font=F["small"], bg=C["card"], fg=C["text"], insertbackground=C["text"],
+                         relief="flat", bd=0, highlightthickness=0)
+        entry.pack(fill="x")
+        entry.insert(0, self.settings.get("ics_url", ""))
+        status = text("", color=C["muted"])
+        text("The link is saved only on this PC. Anyone who has it can see your calendar, so keep it private.",
+             color=C["muted"], pady=(2, 0))
+
+        def done(res, err):
+            if not d.winfo_exists():
+                return
+            if err:
+                status.config(text=f"That didn't work: {err}", fg=C["accent"])
+                return
+            self.settings["ics_url"] = entry.get().strip()
+            self.cache["events"] = res
+            self.cache["events_fetched"] = datetime.now().isoformat(timespec="seconds")
+            self.cache.pop("events_error", None)
+            self.app.persist()
+            d.destroy()
+            if self.alive():
+                self.build()
+
+        def save():
+            url = entry.get().strip()
+            if not url.lower().startswith(("https://", "http://", "webcal://")):
+                status.config(text="Paste the full link (it starts with https://).", fg=C["accent"])
+                return
+            status.config(text="Checking the link...", fg=C["muted"])
+            self.app.run_bg(lambda: fetch_events(url), done)
+
+        btns = tk.Frame(body, bg=C["bg"])
+        btns.pack(fill="x", pady=(12, 0))
+        pill(btns, "CONNECT", save, C, F).pack(side="left")
+        pill(btns, "CANCEL", d.destroy, C, F, primary=False).pack(side="left", padx=(8, 0))
+        entry.bind("<Return>", lambda e: save())
+        entry.focus_set()
+
+
 # =========================================================================== notes tab
 
 
@@ -890,48 +1882,53 @@ class NotesView:
         C, F = self.C, self.F
 
         head = tk.Frame(self.parent, bg=C["bg"])
-        head.pack(fill="x", padx=22, pady=(18, 12))
+        head.pack(fill="x", padx=PAD, pady=(16, GAP + 2))
         tk.Label(head, text="NOTES", font=F["day"], fg=C["text"], bg=C["bg"]).pack(side="left")
-        new = tk.Label(head, text="+ NEW", font=F["small_b"], fg="#ffffff", bg=C["accent"],
-                       padx=10, pady=4, cursor="hand2")
-        new.pack(side="right")
-        new.bind("<Button-1>", lambda e: self.new_note())
+        pill(head, "+ NEW", self.new_note, C, F).pack(side="right")
 
-        self.scroll = ScrollArea(self.parent, C)
+        self.scroll = ScrollArea(self.parent, C, on_width=self.rewrap)
         self.scroll.pack(fill="both", expand=True)
+        self.previews = []
         notes = sorted(self.app.data["notes"], key=lambda n: n.get("updated", ""), reverse=True)
         if not notes:
             tk.Label(self.scroll.inner, text="No notes yet.\nClick + NEW to write one.", font=F["body"],
                      fg=C["faint"], bg=C["bg"], justify="center").pack(pady=50)
         for n in notes:
             self.render_card(n)
-        if notes:
-            tk.Frame(self.scroll.inner, height=1, bg=C["line"]).pack(fill="x")
+        tk.Frame(self.scroll.inner, height=PAD, bg=C["bg"]).pack(fill="x")
+
+    def rewrap(self, width):
+        for lbl in getattr(self, "previews", []):
+            try:
+                lbl.config(wraplength=max(80, width - 2 * PAD - 2 * CARD_PAD))
+            except tk.TclError:
+                pass
 
     def render_card(self, n):
         C, F = self.C, self.F
-        tk.Frame(self.scroll.inner, height=1, bg=C["line"]).pack(fill="x")
-        card = tk.Frame(self.scroll.inner, bg=C["bg"], cursor="hand2")
-        card.pack(fill="x", padx=22, pady=12)
-        top = tk.Frame(card, bg=C["bg"])
+        card = Card(self.scroll.inner, C["bg"], C["card"], cursor="hand2")
+        card.pack(fill="x", padx=PAD, pady=(0, GAP))
+        fill = C["card"]
+        top = tk.Frame(card.inner, bg=fill, cursor="hand2")
         top.pack(fill="x")
         title = tk.Label(top, text=n.get("title") or "Untitled", font=F["note_title"], fg=C["text"],
-                         bg=C["bg"], anchor="w")
+                         bg=fill, anchor="w", cursor="hand2")
         title.pack(side="left")
-        dele = tk.Label(top, text="×", font=F["icon"], fg=C["bg"], bg=C["bg"], cursor="hand2")
+        dele = tk.Label(top, text="\u00d7", font=F["icon"], fg=fill, bg=fill, cursor="hand2")
         dele.pack(side="right")
-        when = tk.Label(top, text=self.when(n.get("updated")), font=F["small"], fg=C["muted"], bg=C["bg"])
+        when = tk.Label(top, text=self.when(n.get("updated")), font=F["small"], fg=C["muted"], bg=fill)
         when.pack(side="right", padx=6)
         plain = " ".join("".join(r[0] for r in n.get("content", [])).replace(BULLET, "").split())
-        if len(plain) > 52:
-            plain = plain[:50].rstrip() + "…"
-        prev = tk.Label(card, text=plain or "Empty note", font=F["small"],
-                        fg=C["muted"], bg=C["bg"], anchor="w", justify="left")
-        prev.pack(fill="x")
-        for w in (card, top, title, when, prev):
+        if len(plain) > 110:
+            plain = plain[:108].rstrip() + "\u2026"
+        prev = tk.Label(card.inner, text=plain or "Empty note", font=F["small"], cursor="hand2",
+                        fg=C["muted"], bg=fill, anchor="w", justify="left")
+        prev.pack(fill="x", pady=(4, 0))
+        self.previews.append(prev)
+        for w in (card, card.inner, top, title, when, prev):
             w.bind("<Button-1>", lambda e: self.open(n))
         dele.bind("<Button-1>", lambda e: self.delete(n))
-        bind_hover(card, lambda: dele.config(fg=C["muted"]), lambda: dele.config(fg=C["bg"]))
+        bind_hover(card, lambda: dele.config(fg=C["muted"]), lambda: dele.config(fg=fill))
 
     @staticmethod
     def when(stamp):
@@ -1209,7 +2206,76 @@ class NotesView:
 # =========================================================================== start
 
 
+def sample_ics(today):
+    """A small Outlook-style calendar used by --selftest."""
+    mon = today - timedelta(days=today.weekday())
+    d = lambda x: x.strftime("%Y%m%d")
+    t1 = today + timedelta(days=1)
+    return "\r\n".join([
+        "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:Microsoft Exchange Server 2010",
+        "BEGIN:VTIMEZONE", "TZID:Mountain Standard Time", "END:VTIMEZONE",
+        # every weekday 9:00, but not tomorrow (EXDATE)
+        "BEGIN:VEVENT", "UID:standup", "SUMMARY:Team stand-up", "LOCATION:Teams",
+        f"DTSTART;TZID=Mountain Standard Time:{d(mon - timedelta(weeks=2))}T090000",
+        f"DTEND;TZID=Mountain Standard Time:{d(mon - timedelta(weeks=2))}T091500",
+        "RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR,SA,SU;WKST=SU",
+        f"EXDATE;TZID=Mountain Standard Time:{d(t1)}T090000", "END:VEVENT",
+        # a moved occurrence of the stand-up: today at 10:30 instead of 9:00
+        "BEGIN:VEVENT", "UID:standup", "SUMMARY:Team stand-up (moved)",
+        f"RECURRENCE-ID;TZID=Mountain Standard Time:{d(today)}T090000",
+        f"DTSTART;TZID=Mountain Standard Time:{d(today)}T103000",
+        f"DTEND;TZID=Mountain Standard Time:{d(today)}T104500", "END:VEVENT",
+        "BEGIN:VEVENT", "UID:allday", "SUMMARY:Office closed", f"DTSTART;VALUE=DATE:{d(t1)}",
+        f"DTEND;VALUE=DATE:{d(t1 + timedelta(days=1))}", "END:VEVENT",
+        "BEGIN:VEVENT", "UID:gone", "SUMMARY:Canceled: Old meeting", "STATUS:CANCELLED",
+        f"DTSTART:{d(t1)}T180000Z", f"DTEND:{d(t1)}T190000Z", "END:VEVENT",
+        "BEGIN:VEVENT", "UID:monthly", "SUMMARY:Monthly review\\, Q&A",
+        f"DTSTART;TZID=Mountain Standard Time:{d(today.replace(day=1) - timedelta(days=60))}T140000",
+        "DURATION:PT1H", "RRULE:FREQ=MONTHLY;BYDAY=1MO,3MO", "BEGIN:VALARM", "TRIGGER:-PT15M",
+        "END:VALARM", "END:VEVENT",
+        "END:VCALENDAR", ""])
+
+
+def selftest():
+    """python desktodo.pyw --selftest : checks weather, city search and calendar parsing."""
+    ok = True
+    today = date.today()
+    events = parse_ics(sample_ics(today), datetime.combine(today, datetime.min.time()),
+                       datetime.combine(today + timedelta(days=8), datetime.min.time()))
+    for e in events:
+        print("event:", e["start"], e["title"], "| all day" if e["all_day"] else "")
+    titles = [e["title"] for e in events]
+    checks = {
+        "moved occurrence replaces today's 9:00": titles.count("Team stand-up (moved)") == 1
+        and not any(e["title"] == "Team stand-up" and e["start"].startswith(today.isoformat()) for e in events),
+        "EXDATE skips tomorrow": not any(e["title"] == "Team stand-up"
+                                         and e["start"].startswith((today + timedelta(days=1)).isoformat())
+                                         for e in events),
+        "recurring weekly expands": titles.count("Team stand-up") >= 5,
+        "cancelled hidden": not any("Old meeting" in t for t in titles),
+        "all-day event": "Office closed" in titles,
+        "text unescaped": all("\\" not in t for t in titles),
+    }
+    for name, passed in checks.items():
+        print(("PASS " if passed else "FAIL ") + name)
+        ok &= passed
+    try:
+        places = geocode("Basalt, CO")
+        print("geocode:", places[0])
+        ok &= places[0]["region"] == "Colorado"
+        for c in DEFAULT_CITIES:
+            w = fetch_weather(c["lat"], c["lon"])
+            print("weather:", c["name"], w)
+    except Exception as exc:
+        print("FAIL network:", exc)
+        ok = False
+    print("SELFTEST", "OK" if ok else "FAILED")
+    return ok
+
+
 def main():
+    if "--selftest" in sys.argv:
+        sys.exit(0 if selftest() else 1)
     if sys.platform == "win32":
         try:  # crisp text on high-DPI screens
             import ctypes
