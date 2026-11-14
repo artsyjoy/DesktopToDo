@@ -112,10 +112,22 @@ except ImportError:  # pragma: no cover
 USER_AGENT = "DeskTodo/1.0 (desktop to-do widget)"
 
 
-def http_get(url, timeout=20):
+def http_get(url, timeout=20, attempts=3):
+    """GET a URL as text. Retries brief network glitches (dropped connections, timeouts)."""
+    import time
+    import urllib.error
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", errors="replace")
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 or attempt == attempts - 1:
+                raise  # a real answer from the server (e.g. bad link): don't retry
+        except (urllib.error.URLError, OSError):
+            if attempt == attempts - 1:
+                raise
+        time.sleep(1.5 * (attempt + 1))
 
 
 WEATHER_CODES = {
