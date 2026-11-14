@@ -61,10 +61,10 @@ Upload the three files in `store/screenshots/` (1366×768 PNG):
 `store/Assets/StoreListingLogo300.png` (300×300)
 
 ## Privacy policy URL
-https://github.com/artsyjoy/LGClaudeTV/blob/claude/lucid-mayer-1zv096/PRIVACY.md
+https://github.com/artsyjoy/DesktopToDo/blob/claude/lucid-mayer-1zv096/PRIVACY.md
 
 ## Support contact
-https://github.com/artsyjoy/LGClaudeTV/issues
+https://github.com/artsyjoy/DesktopToDo/issues
 
 ## Category
 Productivity
