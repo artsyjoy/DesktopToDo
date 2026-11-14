@@ -1073,15 +1073,13 @@ function wireChrome() {
   });
   document.addEventListener("contextmenu", e => { if (!e.target.closest("input, [contenteditable]")) e.preventDefault(); });
 
-  // resize from the handle on the bottom edge: height only, the widget keeps its width
+  // resize from the handle on the bottom edge (height only). One message starts it; Python then follows
+  // the mouse natively until the button is released, so nothing queues up and the window never stalls.
   const grip = $("#grip");
   grip.addEventListener("pointerdown", e => {
-    grip.setPointerCapture(e.pointerId);
-    const sy = e.screenY, w0 = innerWidth, h0 = innerHeight; let raf = 0, last = null;
-    call("report_size", innerWidth);
-    const move = ev => { last = [w0, h0 + ev.screenY - sy]; if (!raf) raf = requestAnimationFrame(() => { raf = 0; call("resize", ...last); }); };
-    const up = () => { grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", up); };
-    grip.addEventListener("pointermove", move); grip.addEventListener("pointerup", up);
+    if (e.button !== 0) return;
+    e.preventDefault();
+    call("begin_resize");
   });
 }
 

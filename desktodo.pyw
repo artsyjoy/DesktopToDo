@@ -46,6 +46,8 @@ class Api:
         self._window = None
         self._css_width = None
         self._lock = threading.Lock()
+        self._hwnd = None          # native window handle, set once the window is shown
+        self._resizing = False
 
     # ---- data ------------------------------------------------------------------------
     def get_state(self):
@@ -84,13 +86,58 @@ class Api:
     def report_size(self, css_width):
         self._css_width = css_width
 
-    def resize(self, css_w, css_h):
-        """Resize from the corner grip. JS sends CSS pixels; convert to the window's units."""
-        w = self._window
-        if not w:
+    def begin_resize(self):
+        """Start a height-only resize from the bottom handle.
+
+        Python follows the mouse with plain Win32 calls until the left button is released. The page sends
+        just this one message, so nothing piles up between the page and the window (that froze 1.5.x)."""
+        if sys.platform != "win32" or not self._hwnd or self._resizing:
             return
-        ratio = (w.width / self._css_width) if self._css_width else 1.0
-        w.resize(max(360, int(css_w * ratio)), max(440, int(css_h * ratio)))
+        self._resizing = True
+        threading.Thread(target=self._resize_loop, daemon=True).start()
+
+    def _resize_loop(self):
+        import ctypes
+        import time
+        from ctypes import wintypes as wt
+        u32 = ctypes.windll.user32
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD)]
+        # exact signatures, so 64-bit window handles are passed intact
+        u32.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+        u32.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
+        u32.GetDpiForWindow.argtypes = [wt.HWND]
+        u32.MonitorFromWindow.argtypes = [wt.HWND, wt.DWORD]
+        u32.MonitorFromWindow.restype = wt.HANDLE
+        u32.GetMonitorInfoW.argtypes = [wt.HANDLE, ctypes.POINTER(MONITORINFO)]
+        u32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
+        u32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        u32.GetAsyncKeyState.restype = ctypes.c_short
+        try:
+            hwnd = self._hwnd
+            rect, pt = wt.RECT(), wt.POINT()
+            u32.GetWindowRect(hwnd, ctypes.byref(rect))
+            u32.GetCursorPos(ctypes.byref(pt))
+            width, start_h, start_y = rect.right - rect.left, rect.bottom - rect.top, pt.y
+            scale = (u32.GetDpiForWindow(hwnd) or 96) / 96
+            min_h = int(440 * scale)
+            mi = MONITORINFO(); mi.cbSize = ctypes.sizeof(MONITORINFO)
+            u32.GetMonitorInfoW(u32.MonitorFromWindow(hwnd, 2), ctypes.byref(mi))
+            max_h = max(min_h, mi.rcWork.bottom - rect.top)           # stop at the bottom of the screen
+            flags = 0x0002 | 0x0004 | 0x0010 | 0x4000                 # no move, no z-order, no activate, async
+            last = start_h
+            while u32.GetAsyncKeyState(0x01) & 0x8000:                # until the mouse button is released
+                u32.GetCursorPos(ctypes.byref(pt))
+                h = int(max(min_h, min(max_h, start_h + pt.y - start_y)))
+                if h != last:
+                    u32.SetWindowPos(hwnd, None, 0, 0, width, h, flags)
+                    last = h
+                time.sleep(1 / 120)
+        except Exception:
+            log.warning("Resize failed: %s", traceback.format_exc())
+        finally:
+            self._resizing = False
 
     def set_on_top(self, on):
         if self._window:
@@ -152,19 +199,66 @@ class Api:
 
     # ---- CI smoke test ---------------------------------------------------------------
     def smoke(self, info):
-        out = os.path.join(tempfile.gettempdir(), "desktodo_smoke.json")
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump(info, f)
-        threading.Timer(1.0, lambda: self._window and self._window.destroy()).start()
+        """CI: the page loaded. On Windows also drag-resize for real, then check the window still responds."""
+        def run():
+            if sys.platform == "win32" and self._hwnd:
+                info.update(self._smoke_resize())
+                info["ok"] = bool(info.get("ok") and info.get("resize_ok") and info.get("responsive"))
+            out = os.path.join(tempfile.gettempdir(), "desktodo_smoke.json")
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(info, f)
+            time.sleep(1.0)
+            if self._window:
+                self._window.destroy()
+        import time
+        threading.Thread(target=run, daemon=True).start()
+
+    def _smoke_resize(self):
+        import ctypes
+        import time
+        from ctypes import wintypes as wt
+        u32 = ctypes.windll.user32
+        u32.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+        rect = wt.RECT()
+        u32.GetWindowRect(self._hwnd, ctypes.byref(rect))
+        before = rect.bottom - rect.top
+        x, y = (rect.left + rect.right) // 2, rect.bottom + 5     # just below the window: clicks nothing in it
+        u32.SetCursorPos(x, y)
+        u32.mouse_event(0x0002, 0, 0, 0, 0)                       # left button down
+        self.begin_resize()
+        for step in range(1, 21):                                 # drag 120 px down over ~0.4 s
+            u32.SetCursorPos(x, y + step * 6)
+            time.sleep(0.02)
+        time.sleep(0.2)
+        u32.mouse_event(0x0004, 0, 0, 0, 0)                       # left button up
+        time.sleep(0.4)
+        u32.GetWindowRect(self._hwnd, ctypes.byref(rect))
+        after = rect.bottom - rect.top
+        result = {}
+        t = threading.Thread(target=lambda: result.update(js=self._window.evaluate_js("1 + 1")), daemon=True)
+        t.start(); t.join(5)                                      # the page must still answer quickly
+        return {"height_before": before, "height_after": after, "resize_ok": after - before >= 60,
+                "resize_finished": not self._resizing, "responsive": result.get("js") == 2}
 
 
-def round_corners(window):
+def on_shown(window, api):
+    """Once the window exists: remember its handle (for resizing) and round its corners."""
+    if sys.platform != "win32":
+        return
+    try:
+        api._hwnd = int(window.native.Handle.ToInt64())
+    except Exception:
+        log.warning("Could not read the window handle: %s", traceback.format_exc())
+    round_corners(window, api._hwnd)
+
+
+def round_corners(window, hwnd=None):
     """Windows 11: ask the compositor for rounded, antialiased corners with a soft shadow."""
     if sys.platform != "win32":
         return
     try:
         import ctypes
-        hwnd = int(window.native.Handle.ToInt64())
+        hwnd = hwnd or int(window.native.Handle.ToInt64())
         pref = ctypes.c_int(2)  # DWMWCP_ROUND
         ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
     except Exception:
@@ -333,7 +427,7 @@ def run():
         **kwargs,
     )
     api._window = window
-    window.events.shown += lambda: round_corners(window)
+    window.events.shown += lambda: on_shown(window, api)
     window.events.closing += api.remember_geometry
     window.events.loaded += lambda: log.info("Page loaded with renderer: %s", getattr(webview, "renderer", "?"))
     if SMOKE:  # never hang a CI run: give up after 60 s and report why
