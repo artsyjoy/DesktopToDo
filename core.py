@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from html import escape
 
 APP_NAME = "DeskTodo"
+APP_VERSION = "1.5.4"   # shown in the top-bar right-click menu; bump with each release
 BULLET = "\u2022  "
 
 # =========================================================================== paths & storage

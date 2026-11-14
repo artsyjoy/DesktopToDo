@@ -1063,6 +1063,7 @@ function wireChrome() {
         });
       }],
       "-", ["Close DeskTodo", () => $("#close").click()],
+      "-", [`DeskTodo ${ui.version || ""}`.trim(), () => toast(`You're running DeskTodo ${ui.version || ""}`.trim())],
     ]);
   });
   document.addEventListener("keydown", e => {
@@ -1104,6 +1105,7 @@ async function start() {
   D = st.data; S = D.settings = D.settings || {};
   D.days = D.days || {}; D.notes = D.notes || [];
   ui.smoke = !!st.smoke;
+  ui.version = st.version || "";
   if (rollOver()) save();
   ui.noteId = S.open_note && D.notes.some(n => n.id === S.open_note) ? S.open_note : null;
   applyTheme();
@@ -1118,7 +1120,8 @@ async function start() {
   window.addEventListener("resize", () => placePill($("#tabs"), false));
   call("report_size", innerWidth);
   if (ui.smoke) setTimeout(() => call("smoke", {
-    ok: !!$(".clock span").textContent, ua: navigator.userAgent,
+    ok: !!$(".clock span").textContent && typeof wireTaskDrag === "function" && typeof wireNoteDrag === "function",
+    version: ui.version, dragReady: typeof wireTaskDrag === "function", ua: navigator.userAgent,
     viewTransitions: !!document.startViewTransition, colorMix: CSS.supports("color", "color-mix(in srgb, red, blue)"),
   }), 1500);
 }

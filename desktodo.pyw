@@ -49,7 +49,7 @@ class Api:
 
     # ---- data ------------------------------------------------------------------------
     def get_state(self):
-        return {"data": self._data, "smoke": SMOKE, "platform": sys.platform}
+        return {"data": self._data, "smoke": SMOKE, "platform": sys.platform, "version": core.APP_VERSION}
 
     def save(self, data):
         with self._lock:
@@ -348,8 +348,13 @@ def run():
         t.start()
     # WebView2 only: the old Internet Explorer engine can't run this interface.
     gui = "edgechromium" if sys.platform == "win32" else None
-    log.info("Starting window (gui=%s)", gui)
-    webview.start(gui=gui, private_mode=False, storage_path=core.data_dir(), debug=SMOKE)
+    log.info("Starting DeskTodo %s (gui=%s)", core.APP_VERSION, gui)
+    # Remove the browser cache older versions kept in the data folder: it could keep showing an old
+    # interface after an update. (Tasks and notes live in data.json, which is never touched here.)
+    import shutil
+    shutil.rmtree(os.path.join(core.data_dir(), "EBWebView"), ignore_errors=True)
+    # private_mode: WebView2 keeps no cache on disk, so every update shows its new interface right away.
+    webview.start(gui=gui, private_mode=True, debug=SMOKE)
 
 
 if __name__ == "__main__":
