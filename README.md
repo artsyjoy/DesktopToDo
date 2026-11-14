@@ -45,14 +45,18 @@ A to-do list, notes and "at a glance" dashboard that lives on your Windows deskt
 
 ## Get it running
 
-**Option A — the .exe (no install needed).**
-Every push builds `DeskTodo.exe` with GitHub Actions. Open the repo's **Actions** tab →
-latest "Build DeskTodo for Windows" run → download **DeskTodo-windows** under *Artifacts*,
-unzip it, and run `DeskTodo.exe`.
+**Option A — the app (no install needed).**
+Every push builds DeskTodo with GitHub Actions (and scans it with Microsoft Defender).
+Open the repo's **Actions** tab → latest "Build DeskTodo for Windows" run → download **DeskTodo-windows**
+under *Artifacts*. Right-click the zip → **Properties** → tick **Unblock** → OK, then unzip it.
 
-To avoid the "Windows protected your PC" warning: before unzipping, right-click the downloaded zip →
-**Properties** → tick **Unblock** → OK. (The warning appears because the app isn't code-signed;
-see "Code signing" below.)
+You get a **DeskTodo** folder containing `DeskTodo.exe` and an `_internal` folder. Keep them together:
+move the whole folder somewhere permanent (e.g. `C:\Users\<you>\Apps\DeskTodo`) and run `DeskTodo.exe`
+from there. To update later, close DeskTodo and replace the whole folder.
+
+If Microsoft Defender still removes it, open **Windows Security → Virus & threat protection →
+Protection history**, choose the DeskTodo entry → **Actions → Restore**. You can also report it as a
+false positive at https://www.microsoft.com/wdsi/filesubmission so Defender learns it is safe.
 
 **Option B — with Python.**
 Install Python from python.org (tick "Add to PATH"), then double-click `desktodo.pyw`.
@@ -60,7 +64,7 @@ Keep the `fonts` folder next to it.
 
 ## Start it with Windows
 
-Press **Win+R**, type `shell:startup`, Enter. Right-click `DeskTodo.exe` (or `desktodo.pyw`) →
+Press **Win+R**, type `shell:startup`, Enter. Right-click `DeskTodo.exe` inside the DeskTodo folder (or `desktodo.pyw`) →
 *Show more options → Create shortcut*, and move the shortcut into that folder.
 
 ## Credits
