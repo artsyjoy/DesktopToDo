@@ -11,7 +11,7 @@
   function events() {
     const out = [];
     const nextHour = Math.min(22, now.getHours() + 1);
-    out.push({ start: at(day(0), nextHour), end: at(day(0), nextHour, 30), title: "Design review", location: "Teams", all_day: false });
+    out.push({ start: at(day(0), nextHour), end: at(day(0), nextHour, 30), title: "Design review", location: "https://example.zoom.us/j/9702743169?pwd=9COVG45MayERPujE5Ut6T1ubhFaTeJ.1&from=addon", all_day: false });
     out.push({ start: at(day(1), 0), end: at(day(2), 0), title: "Office closed", location: "", all_day: true });
     for (let i = 2; i < 40; i++) {
       const d = day(i);

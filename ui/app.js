@@ -317,6 +317,8 @@ function buildGlance() {
   });
   wireCalendarSwipe(g.calVp);
   wireTasks(g.calDetail, () => { renderCalDetail(); renderTiles(); renderWeek(); markBusy(); });
+  wireTaskDrag(g.calDetail, { list: () => g.calDetail, bands: false,
+    refresh: () => { renderCalDetail(); renderTiles(); renderWeek(); } });
   wireTasks(g.tiles, () => {});
   g.tiles.addEventListener("click", e => {
     const t = e.target.closest("[data-tile]"); if (!t) return;
@@ -658,6 +660,7 @@ function buildTodo() {
     ui.todoOpen = opening ? iso : "";
   });
   wireTasks(inner, iso => renderBand(iso, inner));
+  wireTaskDrag(inner, { list: row => row.closest(".acc-body"), bands: true, refresh: iso => renderBand(iso, inner) });
   return page;
 }
 function renderBand(iso, root = document) {
@@ -774,8 +777,270 @@ function buildEditor(focusTitle = false) {
     if (t.dataset.cmd === "list") document.execCommand("insertUnorderedList");
     changed(); tools();
   });
+  wireNoteDrag(page, body, changed);
   setTimeout(() => { if (focusTitle) title.focus(); }, 380);
   return page;
+}
+
+// ---------------------------------------------------------------- drag to rearrange
+const GRIP = '<svg width="8" height="14" viewBox="0 0 8 14"><g fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="6" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="6" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="6" cy="12" r="1.3"/></g></svg>';
+const STEP = 26;   // pixels of sideways drag per nesting level
+
+/* Shared drag mechanics: a floating copy follows the pointer, a line shows where it will land,
+   and the page scrolls when the pointer nears its top or bottom edge. */
+function startDrag(srcEl, ev, scroller) {
+  document.documentElement.classList.add("dragging-now");
+  const r = srcEl.getBoundingClientRect();
+  const ghost = srcEl.cloneNode(true);
+  ghost.classList.add("drag-ghost"); ghost.classList.remove("dragging");
+  ghost.querySelectorAll("ul, .acts").forEach(n => n.remove());
+  Object.assign(ghost.style, { left: r.left + "px", top: r.top + "px", width: Math.min(r.width, 340) + "px" });
+  document.body.appendChild(ghost);
+  const line = h('<div class="drop-line" hidden></div>'); document.body.appendChild(line);
+  const off = { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  let y = ev.clientY, raf = 0;
+  const tick = () => {
+    if (scroller) {
+      const s = scroller.getBoundingClientRect();
+      if (y < s.top + 48) scroller.scrollTop -= Math.ceil((s.top + 48 - y) / 6);
+      else if (y > s.bottom - 48) scroller.scrollTop += Math.ceil((y - (s.bottom - 48)) / 6);
+    }
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+  return {
+    move(e) { y = e.clientY; ghost.style.left = e.clientX - off.x + "px"; ghost.style.top = e.clientY - off.y + "px"; },
+    showLine(top, left, width) { line.hidden = false; Object.assign(line.style, { top: top + "px", left: left + "px", width: Math.max(40, width) + "px" }); },
+    hideLine() { line.hidden = true; },
+    end() { cancelAnimationFrame(raf); ghost.remove(); line.remove(); document.documentElement.classList.remove("dragging-now"); },
+  };
+}
+function onDragGesture(el, start) {
+  // start a drag only after the pointer moves a few pixels, so clicks and double-clicks still work
+  el.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    const ctx = start(e); if (!ctx) return;
+    const sx = e.clientX, sy = e.clientY; let d = null;
+    const move = ev => {
+      if (!d) { if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return; d = ctx.begin(ev); getSelection().removeAllRanges(); }
+      d.move(ev);
+    };
+    const up = ev => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); if (d) d.drop(ev); };
+    addEventListener("pointermove", move); addEventListener("pointerup", up);
+  });
+}
+function flash(el) {   // brief highlight where something landed (removed again so it isn't saved into notes)
+  if (!el) return;
+  el.classList.remove("landed"); void el.offsetWidth; el.classList.add("landed");
+  setTimeout(() => { el.classList.remove("landed"); if (!el.classList.length) el.removeAttribute("class"); }, 950);
+}
+
+/* Tasks: drag up/down to reorder, sideways to nest or un-nest, or onto another day's name to move it there. */
+function wireTaskDrag(container, opts) {
+  onDragGesture(container, e => {
+    const row = e.target.closest(".task[data-id]");
+    if (!row || e.target.closest(".chk, .acts, input")) return null;
+    return { begin(ev) { return taskDrag(row, ev, container, opts); } };
+  });
+}
+function taskDrag(row, ev0, container, opts) {
+  const id = row.dataset.id; const src = findTask(id); if (!src.t) return { move() {}, drop() {} };
+  const moving = [row];
+  if (!src.parent) { let n = row.nextElementSibling; while (n && n.classList.contains("sub")) { moving.push(n); n = n.nextElementSibling; } }
+  moving.forEach(m => m.classList.add("dragging"));
+  const list = opts.list(row);
+  const d = startDrag(row, ev0, container.closest(".page"));
+  const baseDepth = src.parent ? 1 : 0;
+  let target = null;
+
+  const compute = e => {
+    $$(".band-head.drop-target").forEach(x => x.classList.remove("drop-target"));
+    if (opts.bands) {
+      const head = document.elementFromPoint(e.clientX, e.clientY)?.closest(".band-head");
+      if (head && !head.parentElement.classList.contains("open")) {
+        head.classList.add("drop-target"); d.hideLine();
+        return { day: head.parentElement.dataset.iso };
+      }
+    }
+    const rows = $$(".task[data-id]", list).filter(r => !moving.includes(r));
+    let idx = rows.length;
+    for (let i = 0; i < rows.length; i++) { const r = rows[i].getBoundingClientRect(); if (e.clientY < r.top + r.height / 2) { idx = i; break; } }
+    let depth = Math.round((e.clientX - ev0.clientX) / STEP) + baseDepth;
+    depth = idx === 0 ? 0 : Math.max(0, Math.min(1, depth));
+    const lr = list.getBoundingClientRect();
+    const pad = parseFloat(getComputedStyle(list).paddingLeft) || 0;
+    let y;
+    if (rows[idx]) y = rows[idx].getBoundingClientRect().top - 1;
+    else if (rows.length) y = rows[rows.length - 1].getBoundingClientRect().bottom + 1;
+    else y = row.getBoundingClientRect().top;
+    const left = lr.left + pad + depth * 26;
+    d.showLine(y, left, lr.right - pad - left);
+    return { idx, depth, before: rows[idx] ? rows[idx].dataset.id : null };
+  };
+
+  return {
+    move(e) { d.move(e); target = compute(e); },
+    drop() {
+      d.end(); moving.forEach(m => m.classList.remove("dragging"));
+      $$(".band-head.drop-target").forEach(x => x.classList.remove("drop-target"));
+      if (!target) return;
+      const srcIso = src.iso;
+      const flat = [];   // the day as a flat list of {task, depth}, minus what is being moved
+      for (const t of D.days[srcIso] || []) {
+        if (t.id !== id) flat.push({ t, d: 0 });
+        for (const c of t.children || []) if (c.id !== id && t.id !== id) flat.push({ t: c, d: 1 });
+      }
+      const block = [{ t: src.t, d: 0 }].concat(src.parent ? [] : (src.t.children || []).map(c => ({ t: c, d: 1 })));
+      const rebuild = items => {
+        const out = []; let cur = null;
+        for (const { t, d: dep } of items) {
+          if (dep === 0 || !cur) { cur = { id: t.id, text: t.text, done: t.done, children: [] }; out.push(cur); }
+          else cur.children.push({ id: t.id, text: t.text, done: t.done });
+        }
+        return out;
+      };
+      if (target.day) {                                   // dropped on another day's name
+        D.days[srcIso] = rebuild(flat);
+        D.days[target.day] = rebuild((D.days[target.day] || []).flatMap(t => [{ t, d: 0 }].concat((t.children || []).map(c => ({ t: c, d: 1 })))).concat(block));
+        if (!D.days[srcIso].length) delete D.days[srcIso];
+        save(); opts.refresh(srcIso); opts.refresh(target.day);
+        toast(`Moved to ${DAYS[parseIso(target.day).getDay()]}`);
+        return;
+      }
+      block[0].d = target.depth;
+      if (target.depth === 1) block.forEach(b => b.d = 1);
+      let at = target.before ? flat.findIndex(f => f.t.id === target.before) : flat.length;
+      if (at < 0) at = flat.length;
+      flat.splice(at, 0, ...block);
+      D.days[srcIso] = rebuild(flat);
+      save(); opts.refresh(srcIso);
+      flash(document.querySelector(`.task[data-id="${id}"]`));
+    },
+  };
+}
+
+/* Notes: a handle beside each line; drag a line (or a bullet with what's nested under it) to a new spot.
+   Sideways movement changes nesting: right makes it a bullet / nests it, left un-nests it. */
+function noteLines(body) {
+  // flat list of lines: {el, depth (0 = normal line, 1+ = bullet level), top, bottom}
+  for (const n of [...body.childNodes]) {      // wrap loose text into its own line first
+    if (n.nodeType === 3 ? n.textContent.trim() : (n.nodeType === 1 && !/^(DIV|P|UL|OL)$/.test(n.tagName))) {
+      const div = document.createElement("div"); n.replaceWith(div); div.appendChild(n);
+    }
+  }
+  const out = [];
+  const walkList = (list, depth) => {
+    for (const li of list.children) {
+      if (li.tagName !== "LI") continue;
+      const sub = [...li.children].find(c => /^(UL|OL)$/.test(c.tagName));
+      const r = li.getBoundingClientRect();
+      out.push({ el: li, depth, top: r.top, bottom: sub ? sub.getBoundingClientRect().top : r.bottom });
+      [...li.children].filter(c => /^(UL|OL)$/.test(c.tagName)).forEach(l => walkList(l, depth + 1));
+    }
+  };
+  for (const el of body.children) {
+    if (/^(UL|OL)$/.test(el.tagName)) walkList(el, 1);
+    else { const r = el.getBoundingClientRect(); out.push({ el, depth: 0, top: r.top, bottom: r.bottom }); }
+  }
+  return out;
+}
+function lineHTML(el) {
+  if (el.tagName !== "LI") return el.innerHTML;
+  const c = el.cloneNode(true); c.querySelectorAll(":scope > ul, :scope > ol").forEach(n => n.remove());
+  return c.innerHTML;
+}
+function buildNote(lines) {
+  // rebuild the note's HTML from a flat list of {html, depth}
+  const frag = document.createDocumentFragment(); const stack = [];
+  for (const ln of lines) {
+    while (stack.length > ln.depth) stack.pop();
+    if (ln.depth === 0) { const div = document.createElement("div"); div.innerHTML = ln.html || "<br>"; frag.appendChild(div); continue; }
+    while (stack.length < ln.depth) {
+      const ul = document.createElement("ul");
+      if (!stack.length) frag.appendChild(ul);
+      else {
+        const top = stack[stack.length - 1];
+        if (!top.li) { top.li = document.createElement("li"); top.ul.appendChild(top.li); }
+        top.li.appendChild(ul);
+      }
+      stack.push({ ul, li: null });
+    }
+    const li = document.createElement("li"); li.innerHTML = ln.html || "<br>";
+    const top = stack[stack.length - 1]; top.ul.appendChild(li); top.li = li;
+  }
+  return frag;
+}
+function wireNoteDrag(page, body, changed) {
+  $$(".note-grip").forEach(old => old.remove());          // one handle at a time
+  const grip = h(`<div class="note-grip" title="Drag to move this line">${GRIP}</div>`);
+  document.body.appendChild(grip);                         // outside the sliding panel, so its position is exact
+  new MutationObserver((_, obs) => { if (!page.isConnected) { grip.remove(); obs.disconnect(); } })
+    .observe(document.getElementById("views"), { childList: true });
+  let hover = null, hideTimer = 0;
+  const place = ln => {
+    hover = ln; const b = body.getBoundingClientRect();
+    const lineH = Math.min(26, ln.bottom - ln.top);
+    grip.style.left = b.left - 20 + "px"; grip.style.top = ln.top + (lineH - 22) / 2 + "px";
+    grip.classList.add("on");
+  };
+  const hide = () => { clearTimeout(hideTimer); hideTimer = setTimeout(() => grip.classList.remove("on"), 250); };
+  body.addEventListener("mousemove", e => {
+    if (document.documentElement.classList.contains("dragging-now")) return;
+    const ln = noteLines(body).find(l => e.clientY >= l.top && e.clientY < l.bottom && (l.el.textContent.trim() || l.el.querySelector("br")));
+    if (ln) { clearTimeout(hideTimer); place(ln); } else hide();
+  });
+  body.addEventListener("mouseleave", hide);
+  grip.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+  grip.addEventListener("mouseleave", hide);
+  page.addEventListener("scroll", () => grip.classList.remove("on"), { passive: true });
+
+  onDragGesture(grip, e => {
+    if (!hover) return null;
+    e.preventDefault();
+    const dragEl = hover.el;
+    return {
+      begin(ev0) {
+        const lines = noteLines(body);
+        const i0 = lines.findIndex(l => l.el === dragEl);
+        if (i0 < 0) return { move() {}, drop() {} };
+        let j = i0 + 1; while (j < lines.length && lines[j].depth > lines[i0].depth) j++;
+        const block = lines.slice(i0, j);                // the line plus anything nested under it
+        const rest = lines.filter(l => !block.includes(l));
+        block.forEach(l => l.el.classList.add("dragging"));
+        grip.classList.remove("on");
+        const d = startDrag(dragEl, ev0, page);
+        let target = null;
+        return {
+          move(e) {
+            d.move(e);
+            const live = rest.map(l => ({ ...l, ...(r => ({ top: r.top, bottom: l.el.tagName === "LI" && l.el.querySelector(":scope > ul, :scope > ol") ? l.el.querySelector(":scope > ul, :scope > ol").getBoundingClientRect().top : r.bottom }))(l.el.getBoundingClientRect()) }));
+            let idx = live.length;
+            for (let i = 0; i < live.length; i++) if (e.clientY < (live[i].top + live[i].bottom) / 2) { idx = i; break; }
+            const prevDepth = idx > 0 ? live[idx - 1].depth : -1;
+            let depth = block[0].depth + Math.round((e.clientX - ev0.clientX) / STEP);
+            depth = Math.max(0, Math.min(prevDepth + 1, depth));
+            const b = body.getBoundingClientRect();
+            const y = live[idx] ? live[idx].top - 1 : (live.length ? live[live.length - 1].bottom + 1 : b.top);
+            const left = b.left + depth * 22;
+            d.showLine(y, left, b.right - left);
+            target = { idx, depth };
+          },
+          drop() {
+            d.end(); block.forEach(l => l.el.classList.remove("dragging"));
+            if (!target) return;
+            const shift = target.depth - block[0].depth;
+            const flat = rest.map(l => ({ html: lineHTML(l.el), depth: l.depth }));
+            const moved = block.map(l => ({ html: lineHTML(l.el), depth: Math.max(target.depth, l.depth + shift) }));
+            moved[0].depth = target.depth;
+            flat.splice(target.idx, 0, ...moved);
+            body.replaceChildren(buildNote(flat));
+            changed();
+            flash(noteLines(body)[target.idx]?.el);
+          },
+        };
+      },
+    };
+  });
 }
 
 // ---------------------------------------------------------------- window chrome
