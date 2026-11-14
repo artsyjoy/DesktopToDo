@@ -27,6 +27,33 @@ jobs:
       # Checks live weather + city search and the Outlook calendar parser on Windows.
       - run: python desktodo.pyw --selftest
 
+      # Windows 10/11 PCs ship the WebView2 runtime; the Windows Server build machine may not.
+      - name: Make sure the WebView2 runtime is installed
+        shell: pwsh
+        run: |
+          $keys = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+                  "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+          $have = $keys | Where-Object { Test-Path $_ } | ForEach-Object { (Get-ItemProperty $_).pv } | Select-Object -First 1
+          if ($have) { Write-Host "WebView2 runtime present: $have"; exit 0 }
+          Write-Host "Installing the WebView2 runtime..."
+          Invoke-WebRequest "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile "$env:TEMP\wv2setup.exe"
+          Start-Process "$env:TEMP\wv2setup.exe" -ArgumentList "/silent","/install" -Wait
+          $have = $keys | Where-Object { Test-Path $_ } | ForEach-Object { (Get-ItemProperty $_).pv } | Select-Object -First 1
+          Write-Host "WebView2 runtime now: $have"
+
+      # Open the window from source first (errors are printed here), then test the built app below.
+      - name: Smoke-test from source
+        shell: pwsh
+        run: |
+          $out = "$env:TEMP\desktodo_smoke.json"; Remove-Item $out -ErrorAction SilentlyContinue
+          $p = Start-Process python -ArgumentList "desktodo.pyw","--smoketest" -PassThru -NoNewWindow
+          $p | Wait-Process -Timeout 90 -ErrorAction SilentlyContinue
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Write-Host "---- result"; Get-Content $out -ErrorAction SilentlyContinue
+          Write-Host "---- log"; Get-Content "$env:TEMP\desktodo.log" -ErrorAction SilentlyContinue | Select-Object -Last 60
+          $j = Get-Content $out -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+          if (-not $j.ok) { Write-Error "The window did not load its interface (from source)"; exit 1 }
+
       # A normal app folder (DeskTodo.exe + _internal), not a self-extracting single file:
       # self-extracting exes are what antivirus is most suspicious of.
       - name: Build
@@ -47,6 +74,7 @@ jobs:
           for ($i = 0; $i -lt 90; $i++) { if (Test-Path $out) { break }; Start-Sleep -Seconds 1 }
           Start-Sleep -Seconds 3
           if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+          Write-Host "---- log"; Get-Content "$env:TEMP\desktodo.log" -ErrorAction SilentlyContinue | Select-Object -Last 60
           if (-not (Test-Path $out)) { Write-Error "The app window did not load its interface"; exit 1 }
           Get-Content $out
           $j = Get-Content $out -Raw | ConvertFrom-Json

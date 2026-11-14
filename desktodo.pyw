@@ -11,15 +11,23 @@ tasks, notes and settings are saved to %APPDATA%\\DeskTodo\\data.json.
 """
 
 import json
+import logging
 import os
 import sys
 import tempfile
 import threading
+import traceback
 import webbrowser
 
 import core
 
 SMOKE = "--smoketest" in sys.argv
+LOG_FILE = os.path.join(tempfile.gettempdir(), "desktodo.log")
+if SMOKE or os.environ.get("DESKTODO_LOG"):
+    logging.basicConfig(filename=LOG_FILE, filemode="w", level=logging.DEBUG,
+                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+log = logging.getLogger("desktodo")
+WEBVIEW2_URL = "https://developer.microsoft.com/microsoft-edge/webview2/"
 DEFAULT_W, DEFAULT_H = 420, 780
 
 
@@ -134,6 +142,10 @@ class Api:
         except (OSError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
 
+    # ---- diagnostics -----------------------------------------------------------------
+    def log(self, message):
+        log.warning("UI: %s", message)
+
     # ---- CI smoke test ---------------------------------------------------------------
     def smoke(self, info):
         out = os.path.join(tempfile.gettempdir(), "desktodo_smoke.json")
@@ -167,9 +179,37 @@ def on_screen(geo):
     return False
 
 
+def explain_missing_webview2(exc):
+    """Shown when Windows has no WebView2 runtime (rare on Windows 10/11)."""
+    log.error("Could not start the WebView2 window: %s", exc)
+    if SMOKE or sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        msg = ("DeskTodo needs the Microsoft Edge WebView2 Runtime, which is missing on this PC.\n\n"
+               "Click OK to open Microsoft's download page, install the \"Evergreen\" runtime, "
+               "then start DeskTodo again.")
+        if ctypes.windll.user32.MessageBoxW(None, msg, core.APP_NAME, 0x41) == 1:  # OK / Cancel
+            webbrowser.open(WEBVIEW2_URL)
+    except Exception:
+        pass
+
+
 def main():
     if "--selftest" in sys.argv:
         sys.exit(0 if core.selftest() else 1)
+    try:
+        run()
+    except Exception as exc:
+        log.error("Crashed: %s", traceback.format_exc())
+        if SMOKE:
+            with open(os.path.join(tempfile.gettempdir(), "desktodo_smoke.json"), "w", encoding="utf-8") as f:
+                json.dump({"ok": False, "error": traceback.format_exc()}, f)
+        explain_missing_webview2(exc)
+        sys.exit(1)
+
+
+def run():
     if sys.platform == "win32":
         try:
             import ctypes
@@ -206,7 +246,19 @@ def main():
     api.window = window
     window.events.shown += lambda: round_corners(window)
     window.events.closing += api.remember_geometry
-    webview.start(private_mode=False, storage_path=core.data_dir())
+    window.events.loaded += lambda: log.info("Page loaded with renderer: %s", getattr(webview, "renderer", "?"))
+    if SMOKE:  # never hang a CI run: give up after 60 s and report why
+        def give_up():
+            out = os.path.join(tempfile.gettempdir(), "desktodo_smoke.json")
+            if not os.path.exists(out):
+                with open(out, "w", encoding="utf-8") as f:
+                    json.dump({"ok": False, "error": "timeout", "renderer": getattr(webview, "renderer", "?")}, f)
+            window.destroy()
+        threading.Timer(60, give_up).start()
+    # WebView2 only: the old Internet Explorer engine can't run this interface.
+    gui = "edgechromium" if sys.platform == "win32" else None
+    log.info("Starting window (gui=%s)", gui)
+    webview.start(gui=gui, private_mode=False, storage_path=core.data_dir(), debug=SMOKE)
 
 
 if __name__ == "__main__":

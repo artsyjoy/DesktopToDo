@@ -1,6 +1,9 @@
 /* DeskTodo interface. Data lives in Python (core.py); this file draws the UI and animates it.
    All motion uses transform / opacity (GPU-composited), so it stays smooth in WebView2. */
 "use strict";
+// report interface errors to Python (written to the log in test mode)
+window.addEventListener("error", e => { try { window.pywebview && window.pywebview.api.log(`${e.message} @ ${e.filename}:${e.lineno}`); } catch (_) {} });
+window.addEventListener("unhandledrejection", e => { try { window.pywebview && window.pywebview.api.log(`Promise: ${e.reason}`); } catch (_) {} });
 
 // ---------------------------------------------------------------- helpers
 const $ = (s, el = document) => el.querySelector(s);
