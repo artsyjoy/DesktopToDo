@@ -34,6 +34,7 @@ import queue
 import re
 import sys
 import threading
+import time
 import tkinter as tk
 import urllib.parse
 import urllib.request
@@ -157,6 +158,9 @@ GAP = 10        # space between cards
 RADIUS = 20     # card corner radius
 CARD_PAD = 18   # padding inside cards
 TOP = 18        # space above the tab bar
+WINDOW_RADIUS = 22       # rounded corners of the whole widget
+WINDOW_INSET = 7         # content inset so nothing pokes out of the rounded corners
+WINDOW_KEY = "#010203"   # colour Windows makes transparent around the rounded corners
 BELOW_TABS = 26 # breathing room between the tab bar and every screen's content
 
 
@@ -205,6 +209,7 @@ def setup_fonts(root):
         "clock": F(root, family=semi, size=56, weight=semi_w),  # bolder than the other big numbers
         "temp": F(root, family=light, size=32),
         "hero": F(root, family=light, size=46),
+        "date": F(root, family=semi, size=14, weight=semi_w),  # 150% of the small labels
         "stat": F(root, family=light, size=20),
         "month": F(root, family=heavy, size=40, weight=heavy_w),
         "year": F(root, family=semi, size=15, weight=semi_w),
@@ -246,8 +251,96 @@ class PlaceholderEntry(tk.Entry):
             self.delete(0, "end")
 
 
+ANIMATE = True  # set False to make every transition instant
+
+
+class Anim:
+    """Time-based animation with an ease-out curve: step(e) gets 0..1 every frame."""
+
+    def __init__(self, widget, ms, step, done=None):
+        self.widget, self.ms, self.step, self.done = widget, ms, step, done
+        self.start = time.perf_counter()
+        self.over = False
+        if not ANIMATE or ms <= 0:
+            self.finish()
+        else:
+            self._tick()
+
+    def _tick(self):
+        if self.over:
+            return
+        t = min(1.0, (time.perf_counter() - self.start) * 1000 / self.ms)
+        try:
+            self.step(1 - (1 - t) ** 3)
+        except tk.TclError:
+            self.over = True
+            return
+        if t >= 1:
+            self.finish()
+        else:
+            self.widget.after(7, self._tick)
+
+    def cancel(self):
+        self.over = True
+
+    def finish(self):
+        if self.over:
+            return
+        self.over = True
+        try:
+            self.step(1.0)
+        except tk.TclError:
+            return
+        if self.done:
+            self.done()
+
+
+class Slider(tk.Frame):
+    """Holds one page at a time and slides the next page in from the side.
+    fit=True: the slider takes the height of its page (and animates it)."""
+
+    def __init__(self, master, bg, fit=False):
+        super().__init__(master, bg=bg)
+        self.page, self.anim, self.fit = None, None, fit
+
+    def new_page(self):
+        return tk.Frame(self, bg=self["bg"])
+
+    def present(self, page, direction=None, ms=300):
+        if self.anim:
+            self.anim.finish()
+        old, self.page = self.page, page
+        if old is None or not direction or not ANIMATE or not self.winfo_ismapped():
+            if old is not None:
+                old.destroy()
+            page.pack(fill="both", expand=True)
+            return
+        self.update_idletasks()
+        w, h = max(1, self.winfo_width()), max(1, self.winfo_height())
+        nh = page.winfo_reqheight() if self.fit else h
+        self.pack_propagate(False)
+        self.config(width=w, height=h)
+        old.pack_forget()
+        old.place(x=0, y=0, width=w, height=h)
+        page.place(x=direction * w, y=0, width=w, height=nh)
+
+        def step(e):
+            if self.fit:
+                self.config(height=max(1, int(h + (nh - h) * e)))
+            old.place_configure(x=int(-direction * w * e))
+            page.place_configure(x=int(direction * w * (1 - e)))
+
+        def done():
+            old.destroy()
+            page.place_forget()
+            page.pack(fill="both", expand=True)
+            self.pack_propagate(True)
+            self.anim = None
+        self.anim = Anim(self, ms, step, done)
+
+
 class ScrollArea(tk.Frame):
-    """A vertically scrolling frame. Put widgets in .inner"""
+    """A vertically scrolling frame with smooth, eased wheel scrolling. Put widgets in .inner"""
 
     def __init__(self, master, colors, on_width=None):
         super().__init__(master, bg=colors["bg"])
@@ -270,9 +363,18 @@ class ScrollArea(tk.Frame):
         if self.on_width:
             self.on_width(event.width)
 
-    def wheel(self, units):
-        if self.canvas.yview() != (0.0, 1.0):
-            self.canvas.yview_scroll(units, "units")
+    def wheel(self, pixels):
+        c = self.canvas
+        total, view = max(1, self.inner.winfo_height()), c.winfo_height()
+        if total <= view:
+            return
+        top = c.canvasy(0)
+        anim = getattr(self, "_anim", None)
+        target = (self._target if anim and not anim.over else top) + pixels
+        self._target = target = min(max(0, target), total - view)
+        if anim:
+            anim.cancel()
+        self._anim = Anim(c, 220, lambda e: c.yview_moveto((top + (target - top) * e) / total))
 
 
 def bind_hover(row, show, hide):
@@ -347,29 +449,50 @@ def pill(parent, text, command, colors, fonts, primary=True, bg=None):
 
 
 class Segmented(tk.Canvas):
-    """Rounded pill switch (tabs, 12h/24h, city picker): one shared control style."""
+    """Rounded pill switch (tabs, 12h/24h, city picker): one shared control style.
+    The highlight pill glides to the new option."""
 
     def __init__(self, master, items, active, on_change, colors, font, outer, height=30, pad_x=12):
-        C = colors
+        self.C, self.font, self.h = colors, font, height
         widths = [font.measure(label) + 2 * pad_x for _, label in items]
-        width = sum(widths) + 6
-        super().__init__(master, width=width, height=height, bg=outer, highlightthickness=0, bd=0, cursor="hand2")
-        round_rect(self, 0, 0, width - 1, height - 1, height // 2, fill=C["chip"], outline="")
+        self.W = sum(widths) + 6
+        super().__init__(master, width=self.W, height=height, bg=outer, highlightthickness=0, bd=0, cursor="hand2")
         x, self.spans = 3, []
         for (key, label), w in zip(items, widths):
-            on = key == active
-            if on:
-                round_rect(self, x, 3, x + w, height - 4, (height - 7) // 2, fill=C["seg_on"], outline="")
-            self.create_text(x + w / 2, height / 2, text=label, font=font, fill=C["seg_on_fg"] if on else C["muted"])
-            self.spans.append((x, x + w, key))
+            self.spans.append((x, x + w, key, label))
             x += w
+        self.active, self.anim = active, None
+        self.draw(*self.span(active), active)
 
         def click(e):
-            for a, b, key in self.spans:
-                if a <= e.x < b and key != active:
+            for a, b, key, _ in self.spans:
+                if a <= e.x < b and key != self.active:
                     on_change(key)
                     break
         self.bind("<Button-1>", click)
+
+    def span(self, key):
+        for a, b, k, _ in self.spans:
+            if k == key:
+                return a, b
+        return 3, 3
+
+    def draw(self, a, b, lit):
+        C, h = self.C, self.h
+        self.delete("all")
+        round_rect(self, 0, 0, self.W - 1, h - 1, h // 2, fill=C["chip"], outline="")
+        round_rect(self, a, 3, b, h - 4, (h - 7) // 2, fill=C["seg_on"], outline="")
+        for x0, x1, key, label in self.spans:
+            self.create_text((x0 + x1) / 2, h / 2, text=label, font=self.font,
+                             fill=C["seg_on_fg"] if key == lit else C["muted"])
+
+    def slide_to(self, key, ms=260):
+        (a0, b0), (a1, b1) = self.span(self.active), self.span(key)
+        old, self.active = self.active, key
+        if self.anim:
+            self.anim.cancel()
+        self.anim = Anim(self, ms, lambda e: self.draw(a0 + (a1 - a0) * e, b0 + (b1 - b0) * e,
+                                                         key if e > 0.5 else old))
 
 
 def circle_button(parent, colors, outer, draw, command, active=False, size=30):
@@ -648,19 +771,40 @@ class App:
         for w in self.root.winfo_children():
             w.destroy()
         C = self.C
-        border = 1 if self.widget else 0
-        self.root.configure(bg=C["bg"], highlightthickness=border,
-                            highlightbackground=C["line"], highlightcolor=C["line"])
+        if self.widget and self.can_round():
+            # Rounded widget: the window itself is transparent; we draw a rounded backplate on it.
+            self.root.configure(bg=WINDOW_KEY, highlightthickness=0)
+            plate = tk.Canvas(self.root, bg=WINDOW_KEY, highlightthickness=0, bd=0)
+            plate.place(x=0, y=0, relwidth=1, relheight=1)
 
-        top = tk.Frame(self.root, bg=C["bg"], cursor="fleur" if self.widget else "")
-        top.pack(fill="x", padx=PAD, pady=(TOP, 0))
+            def draw_plate(e):
+                plate.delete("all")
+                round_rect(plate, 0, 0, e.width - 1, e.height - 1, WINDOW_RADIUS, fill=C["bg"], outline=C["line"])
+            plate.bind("<Configure>", draw_plate)
+            plate.bind("<ButtonPress-1>", self._drag_start)
+            plate.bind("<B1-Motion>", self._drag_move)
+            host = tk.Frame(self.root, bg=C["bg"])
+            host.place(x=WINDOW_INSET, y=WINDOW_INSET, relwidth=1, relheight=1,
+                       width=-2 * WINDOW_INSET, height=-2 * WINDOW_INSET)
+        else:
+            self.no_round()
+            border = 1 if self.widget else 0
+            self.root.configure(bg=C["bg"], highlightthickness=border,
+                                highlightbackground=C["line"], highlightcolor=C["line"])
+            host = tk.Frame(self.root, bg=C["bg"])
+            host.pack(fill="both", expand=True)
+        self.host = host
+
+        top = tk.Frame(host, bg=C["bg"], cursor="fleur" if self.widget else "")
+        top.pack(fill="x", padx=PAD - WINDOW_INSET * self.widget, pady=(TOP - WINDOW_INSET * self.widget, 0))
         if self.widget:
             top.bind("<ButtonPress-1>", self._drag_start)
             top.bind("<B1-Motion>", self._drag_move)
         top.bind("<Button-3>", self.window_menu)
 
-        Segmented(top, [(k, self.TAB_LABELS[k]) for k in self.VIEWS], self.tab, self.switch,
-                  C, self.F["small_b"], C["bg"], height=32, pad_x=13).pack(side="left")
+        self.tabs = Segmented(top, [(k, self.TAB_LABELS[k]) for k in self.VIEWS], self.tab, self.switch,
+                              C, self.F["small_b"], C["bg"], height=32, pad_x=13)
+        self.tabs.pack(side="left")
 
         if self.widget:
             circle_button(top, C, C["bg"], draw_close, self.on_close).pack(side="right", padx=(6, 0))
@@ -669,46 +813,80 @@ class App:
         on_top = bool(self.settings.get("on_top"))
         circle_button(top, C, C["bg"], draw_pin, self.toggle_on_top, active=on_top).pack(side="right")
 
+        self.strip = self.grip = None
         if self.widget:  # thin bottom strip with a resize handle in the corner
-            strip_bg = C["bg"]
-            if self.tab == "todo":
-                strip_bg = section_bg(C, self.settings.get("theme", "dark") == "dark", TodoView.DAYS - 1)
-            strip = tk.Frame(self.root, bg=strip_bg, height=14)
+            strip = self.strip = tk.Frame(host, bg=C["bg"], height=14)
             strip.pack(side="bottom", fill="x")
-            grip = tk.Canvas(strip, width=14, height=14, highlightthickness=0, bg=strip_bg,
-                             cursor="size_nw_se" if sys.platform == "win32" else "bottom_right_corner")
+            grip = self.grip = tk.Canvas(strip, width=14, height=14, highlightthickness=0, bg=C["bg"],
+                                         cursor="size_nw_se" if sys.platform == "win32" else "bottom_right_corner")
             for k in (4, 8, 12):
                 grip.create_line(13, k, k, 13, fill=C["faint"])
             grip.pack(side="right")
             grip.bind("<ButtonPress-1>", self._resize_start)
             grip.bind("<B1-Motion>", self._resize_move)
 
-        self.body = tk.Frame(self.root, bg=C["bg"])
-        self.body.pack(fill="both", expand=True, pady=(BELOW_TABS, 0))
-        self.view = {"todo": TodoView, "notes": NotesView, "glance": GlanceView}[self.tab](self, self.body)
+        self.body = Slider(host, C["bg"])
+        self.body.pack(fill="both", expand=True, pady=(BELOW_TABS - WINDOW_INSET * self.widget, 0))
+        page = self.body.new_page()
+        self.view = self.VIEW_CLASSES()[self.tab](self, page)
+        self.body.present(page)
+        self.update_strip()
+
+    @staticmethod
+    def VIEW_CLASSES():
+        return {"todo": TodoView, "notes": NotesView, "glance": GlanceView}
+
+    def update_strip(self):
+        if self.strip is None:
+            return
+        C = self.C
+        bg = section_bg(C, self.settings.get("theme", "dark") == "dark", TodoView.DAYS - 1) \
+            if self.tab == "todo" else C["bg"]
+        self.strip.config(bg=bg)
+        self.grip.config(bg=bg)
+
+    def can_round(self):
+        if os.environ.get("DESKTODO_FORCE_ROUND"):
+            return True
+        if sys.platform != "win32":
+            return False
+        try:
+            self.root.attributes("-transparentcolor", WINDOW_KEY)
+            return True
+        except tk.TclError:
+            return False
+
+    def no_round(self):
+        if sys.platform == "win32":
+            try:
+                self.root.attributes("-transparentcolor", "")
+            except tk.TclError:
+                pass
 
 
     def switch(self, tab):
         if tab == self.tab:
             return
 
-        def change():
-            self.leaving()
-            self.tab = self.settings["tab"] = tab
-            self.build()
-        self.transition(change)
+        # the window stays put; only the content slides, and the tab pill glides across
+        self.leaving()
+        direction = 1 if self.VIEWS.index(tab) > self.VIEWS.index(self.tab) else -1
+        self.tab = self.settings["tab"] = tab
+        self.tabs.slide_to(tab)
+        page = self.body.new_page()
+        self.view = self.VIEW_CLASSES()[tab](self, page)
+        self.body.present(page, direction)
+        self.update_strip()
 
     def leaving(self):
         if self.view and hasattr(self.view, "flush"):
             self.view.flush()
 
     def toggle_theme(self):
-        def change():
-            self.leaving()
-            self.settings["theme"] = "light" if self.settings.get("theme", "dark") == "dark" else "dark"
-            self.persist()
-            self.build()
-        self.transition(change)
+        self.leaving()
+        self.settings["theme"] = "light" if self.settings.get("theme", "dark") == "dark" else "dark"
+        self.persist()
+        self.build()
 
     def toggle_on_top(self):
         self.settings["on_top"] = not self.settings.get("on_top", False)
@@ -718,13 +896,13 @@ class App:
         self.build()
 
     def _wheel(self, e, units=None):
-        if units is None:
-            units = -1 if e.delta > 0 else 1
+        # one mouse-wheel notch (delta 120) = 90 px; touchpads send smaller deltas for finer scrolling
+        pixels = units * 90 if units is not None else -e.delta / 120 * 90
         if isinstance(e.widget, tk.Text):
             return  # the notes editor scrolls itself
         if self.view and getattr(self.view, "scroll", None):
             try:
-                self.view.scroll.wheel(units)
+                self.view.scroll.wheel(pixels)
             except tk.TclError:
                 pass
 
@@ -828,15 +1006,17 @@ class TodoView:
 
     # ---- rendering -------------------------------------------------------------
 
-    def render(self, top=False):
+    def render(self, top=False, closing=None, opening=False):
         y = self.scroll.canvas.yview()[0]
         for w in self.scroll.inner.winfo_children():
             w.destroy()
         self.wrap_labels = []
         self.clock_lbl = None
+        self.clips = {}
 
         for i in range(self.DAYS):
-            self.render_day(self.today + timedelta(days=i), i)
+            d = self.today + timedelta(days=i)
+            self.render_day(d, i, details=d.isoformat() in (self.open_day, closing))
         # the last day's colour carries on to the bottom of the window
         last = self.day_bg(self.DAYS - 1)
         self.scroll.canvas.config(bg=last)
@@ -845,8 +1025,36 @@ class TodoView:
         self.root.update_idletasks()
         self.rewrap(self.scroll.canvas.winfo_width())
         self.scroll.canvas.yview_moveto(0 if top else y)
+        if closing or opening:
+            self.slide_days(closing, opening)
 
-    def render_day(self, d, i):
+    def slide_days(self, closing, opening):
+        """Accordion: the newly opened day slides down open while the old one slides shut."""
+        self.root.update_idletasks()
+        items = []
+        if opening and self.open_day in self.clips:
+            clip, content = self.clips[self.open_day]
+            items.append((clip, 1, content.winfo_reqheight()))
+        if closing and closing in self.clips and closing != self.open_day:
+            clip, content = self.clips[closing]
+            items.append((clip, content.winfo_reqheight(), 1))
+        for clip, h0, _ in items:
+            clip.pack_propagate(False)
+            clip.config(height=h0)
+
+        def step(e):
+            for clip, h0, h1 in items:
+                clip.config(height=max(1, int(h0 + (h1 - h0) * e)))
+
+        def done():
+            for clip, h0, h1 in items:
+                if h1 <= 1:
+                    clip.destroy()
+                else:
+                    clip.pack_propagate(True)
+        Anim(self.root, 320, step, done)
+
+    def render_day(self, d, i, details=False):
         C, F = self.C, self.F
         bg = self.day_bg(i)
         iso = d.isoformat()
@@ -859,7 +1067,7 @@ class TodoView:
         sec.pack(fill="x", padx=22)
 
         head = tk.Frame(sec, bg=bg, cursor="hand2")
-        head.pack(fill="x", pady=(14 if i else 0, 14 if not is_open else 0))
+        head.pack(fill="x", pady=(14 if i else 0, 14))
         name = tk.Label(head, text=d.strftime("%A").upper(), font=F["day"], fg=C["text"], bg=bg)
         name.pack(side="left")
         clickers = [outer, head, name]
@@ -872,9 +1080,15 @@ class TodoView:
         for w in clickers:
             w.bind("<Button-1>", lambda e, k=iso: self.toggle_day(k))
 
-        if not is_open:
+        if not details:
             return
 
+        # the day's contents live in a clip frame so they can slide open / shut
+        clip = tk.Frame(sec, bg=bg)
+        clip.pack(fill="x")
+        sec = tk.Frame(clip, bg=bg)
+        sec.pack(fill="x")
+        self.clips[iso] = (clip, sec)
         if i == 0:
             sub = tk.Label(sec, text=self.today_line(d), font=F["small"], fg=C["muted"], bg=bg)
             self.clock_lbl = sub
@@ -980,9 +1194,10 @@ class TodoView:
     # ---- actions ---------------------------------------------------------------
 
     def toggle_day(self, iso):
+        closing = self.open_day
         self.open_day = None if self.open_day == iso else iso
         self.adding_sub = self.editing = None
-        self.render()
+        self.render(closing=closing, opening=self.open_day is not None)
 
     def add_task(self, iso, entry):
         text = entry.value().strip()
@@ -1561,10 +1776,10 @@ class GlanceView:
         wrap.pack(fill="x", padx=PAD, pady=(0, 24))
 
         # centred clock, like the range readout in Rivian's app
-        self.date_lbl = tk.Label(wrap, font=F["small_b"], fg=C["muted"], bg=C["bg"])
+        self.date_lbl = tk.Label(wrap, font=F["date"], fg=C["text"], bg=C["bg"])
         self.date_lbl.pack()
         row = tk.Frame(wrap, bg=C["bg"])
-        row.pack(pady=(10, 8))
+        row.pack(pady=(6, 8))
         self.clock_cv = tk.Canvas(row, height=10, width=10, bg=C["bg"], highlightthickness=0, bd=0)
         self.clock_cv.pack(side="left")
         self.ampm_lbl = tk.Label(row, font=F["tab"], fg=C["muted"], bg=C["bg"])
@@ -1864,8 +2079,30 @@ class GlanceView:
     # ---- calendar ------------------------------------------------------------------
 
     def calendar_card(self, parent):
-        card = Card(parent, self.C["bg"], self.C["card"])
-        self.cal_box = card.inner
+        C, F = self.C, self.F
+        fill = C["card"]
+        card = Card(parent, C["bg"], fill)
+        box = card.inner
+        head = tk.Frame(box, bg=fill)
+        head.pack(fill="x")
+        self.cal_title = Slider(head, fill, fit=True)       # month name slides with the grid
+        self.cal_title.pack(side="left", anchor="nw")
+        nav = tk.Frame(head, bg=fill)
+        nav.pack(side="right", anchor="n", pady=(6, 0))
+        for txt, delta in (("\u203a", 1), ("\u2039", -1)):
+            b = tk.Label(nav, text=txt, font=F["title"], fg=C["muted"], bg=fill, cursor="hand2", padx=7)
+            b.pack(side="right")
+            b.bind("<Button-1>", lambda e, d=delta: self.shift_month(d))
+        pill(nav, "Today", self.cal_today, C, F, primary=False, bg=fill).pack(side="right", padx=(0, 6))
+        tk.Frame(box, height=1, bg=C["line"]).pack(fill="x", pady=(10, 8))
+        self.cal_grid = Slider(box, fill, fit=True)
+        self.cal_grid.pack(fill="x")
+        tk.Frame(box, height=1, bg=C["line"]).pack(fill="x", pady=(8, 10))
+        self.cal_detail = tk.Frame(box, bg=fill)
+        self.cal_detail.pack(fill="x")
+        for w in (box, head):
+            w.bind("<ButtonPress-1>", self._swipe_start)
+            w.bind("<ButtonRelease-1>", lambda e: self._swipe_end(e, None))
         self.render_calendar()
         return card
 
@@ -1879,70 +2116,50 @@ class GlanceView:
                 out.append(e)
         return out
 
-    def busy_days(self, y, m):
-        busy = set()
-        for iso, tasks in self.app.data["days"].items():
-            if iso[:7] == f"{y:04d}-{m:02d}" and any(not t["done"] for t in tasks):
-                busy.add(int(iso[8:10]))
-        for e in self.cache.get("events", []) if self.settings.get("ics_url") else []:
-            s = datetime.fromisoformat(e["start"])
-            if (s.year, s.month) == (y, m):
-                busy.add(s.day)
-        return busy
-
-    def render_calendar(self):
-        box, C, F = self.cal_box, self.C, self.F
+    def render_calendar(self, direction=None):
+        """Build the month title + date grid; with a direction they slide in from that side."""
+        C, F = self.C, self.F
         fill = C["card"]
-        for w in box.winfo_children():
-            w.destroy()
         today = date.today()
         y, m = self.cal_month
         current = (y, m) == (today.year, today.month)
 
-        head = tk.Frame(box, bg=fill)
-        head.pack(fill="x")
-        left = tk.Frame(head, bg=fill)
-        left.pack(side="left")
+        title = self.cal_title.new_page()
         col = C["accent_text"] if current else C["text"]
-        tk.Label(left, text=date(y, m, 1).strftime("%b"), font=F["month"], fg=col, bg=fill,
+        tk.Label(title, text=date(y, m, 1).strftime("%b"), font=F["month"], fg=col, bg=fill,
                  bd=0, pady=0).pack(anchor="w")
-        tk.Label(left, text=str(y), font=F["year"], fg=col, bg=fill).pack(anchor="w")
-        nav = tk.Frame(head, bg=fill)
-        nav.pack(side="right", anchor="n", pady=(6, 0))
-        for txt, delta in (("›", 1), ("‹", -1)):
-            b = tk.Label(nav, text=txt, font=F["title"], fg=C["muted"], bg=fill, cursor="hand2", padx=7)
-            b.pack(side="right")
-            b.bind("<Button-1>", lambda e, d=delta: self.shift_month(d))
-        pill(nav, "Today", self.cal_today, C, F, primary=False, bg=fill).pack(side="right", padx=(0, 6))
+        tk.Label(title, text=str(y), font=F["year"], fg=col, bg=fill).pack(anchor="w")
+        self.cal_title.present(title, direction)
 
-        tk.Frame(box, height=1, bg=C["line"]).pack(fill="x", pady=(10, 8))
-        grid = tk.Frame(box, bg=fill)
-        grid.pack(fill="x")
+        grid = self.cal_grid.new_page()
         for c in range(7):
             grid.columnconfigure(c, weight=1, uniform="cal")
         for c, letter in enumerate("MTWTFSS"):
             tk.Label(grid, text=letter, font=F["small_b"], fg=C["muted"], bg=fill, anchor="w").grid(
                 row=0, column=c, sticky="w", padx=(7, 0), pady=(0, 2))
         first = date(y, m, 1)
-        busy = self.busy_days(y, m)
-        swipe_targets = [grid, box]
+        self.cells = []
         for i in range(days_in_month(y, m)):
             d = first + timedelta(days=i)
             r, c = divmod(first.weekday() + i, 7)
             cell = tk.Canvas(grid, height=38, width=10, bg=fill, highlightthickness=0, cursor="hand2")
             cell.grid(row=r + 1, column=c, sticky="ew")
-            cell.bind("<Configure>", lambda e, cv=cell, dd=d: self.draw_cell(cv, dd, dd.day in busy))
+            cell.bind("<Configure>", lambda e, cv=cell, dd=d: self.draw_cell(cv, dd))
             cell.bind("<ButtonPress-1>", self._swipe_start)
             cell.bind("<ButtonRelease-1>", lambda e, dd=d: self._swipe_end(e, dd))
-        for w in swipe_targets:
-            w.bind("<ButtonPress-1>", self._swipe_start)
-            w.bind("<ButtonRelease-1>", lambda e: self._swipe_end(e, None))
+            self.cells.append((cell, d))
+        grid.bind("<ButtonPress-1>", self._swipe_start)
+        grid.bind("<ButtonRelease-1>", lambda e: self._swipe_end(e, None))
+        self.cal_grid.present(grid, direction, ms=340)
+        self.render_detail()
 
-        tk.Frame(box, height=1, bg=C["line"]).pack(fill="x", pady=(8, 10))
-        self.render_day_detail(box)
+    def render_detail(self):
+        for w in self.cal_detail.winfo_children():
+            w.destroy()
+        self.render_day_detail(self.cal_detail)
         self.on_width(self.width)
 
-    def draw_cell(self, cv, d, busy):
+    def draw_cell(self, cv, d):
         C, F = self.C, self.F
         cv.delete("all")
         w = cv.winfo_width()
@@ -1954,9 +2171,6 @@ class GlanceView:
         elif is_today:
             fg = C["accent_text"]
         cv.create_text(8, 18, text=str(d.day), anchor="w", font=F["cal"], fill=fg)
-        if busy:
-            x = 8 + F["cal"].measure(str(d.day)) / 2
-            cv.create_oval(x - 2, 29, x + 2, 33, fill=fg if selected else C["muted"], outline="")
 
     def _swipe_start(self, e):
         self._swipe_x = e.x_root
@@ -1968,17 +2182,27 @@ class GlanceView:
         elif dx < -40:
             self.shift_month(1)    # drag left -> next month
         elif d is not None:
-            self.cal_sel = d
-            self.render_calendar()
+            self.select_date(d)
+
+    def select_date(self, d):
+        self.cal_sel = d
+        for cv, dd in getattr(self, "cells", []):
+            try:
+                self.draw_cell(cv, dd)
+            except tk.TclError:
+                pass
+        self.render_detail()
 
     def shift_month(self, delta):
         self.cal_month = add_months(*self.cal_month, delta)
-        self.render_calendar()
+        self.render_calendar(direction=delta)
 
     def cal_today(self):
         t = date.today()
-        self.cal_month, self.cal_sel = (t.year, t.month), t
-        self.render_calendar()
+        target = (t.year, t.month)
+        direction = None if target == self.cal_month else (1 if target > self.cal_month else -1)
+        self.cal_month, self.cal_sel = target, t
+        self.render_calendar(direction)
 
     def render_day_detail(self, box):
         C, F = self.C, self.F
@@ -2294,7 +2518,9 @@ class NotesView:
     def __init__(self, app, parent):
         self.app, self.C, self.F = app, app.C, app.F
         self.root = app.root
-        self.parent = parent
+        self.slider = Slider(parent, self.C["bg"])
+        self.slider.pack(fill="both", expand=True)
+        self.parent = None   # the page currently being built
         self.note = None
         self.scroll = None
         self.text = None
@@ -2304,13 +2530,13 @@ class NotesView:
         self.open(note) if note else self.show_list()
 
     def clear(self):
-        for w in self.parent.winfo_children():
-            w.destroy()
+        # start a fresh page; it slides in once it's built (see present())
+        self.parent = self.slider.new_page()
         self.scroll = self.text = None
 
     # ---- list ------------------------------------------------------------------
 
-    def show_list(self):
+    def show_list(self, direction=None):
         self.flush()
         self.note = None
         self.app.settings["open_note"] = None
@@ -2332,6 +2558,7 @@ class NotesView:
         for n in notes:
             self.render_card(n)
         tk.Frame(self.scroll.inner, height=PAD, bg=C["bg"]).pack(fill="x")
+        self.slider.present(self.parent, direction)
 
     def rewrap(self, width):
         for lbl in getattr(self, "previews", []):
@@ -2362,7 +2589,7 @@ class NotesView:
         prev.pack(fill="x", pady=(4, 0))
         self.previews.append(prev)
         for w in (card, card.inner, top, title, when, prev):
-            w.bind("<Button-1>", lambda e: self.app.transition(lambda: self.open(n)))
+            w.bind("<Button-1>", lambda e: self.open(n, direction=1))
         dele.bind("<Button-1>", lambda e: self.delete(n))
         bind_hover(card, lambda: dele.config(fg=C["muted"]), lambda: dele.config(fg=fill))
 
@@ -2379,7 +2606,7 @@ class NotesView:
         n = {"id": new_id(), "title": "", "content": [], "updated": datetime.now().isoformat(timespec="seconds")}
         self.app.data["notes"].append(n)
         self.app.persist()
-        self.open(n, focus_title=True)
+        self.open(n, focus_title=True, direction=1)
 
     def delete(self, n):
         name = n.get("title") or "this note"
@@ -2390,7 +2617,7 @@ class NotesView:
 
     # ---- editor ----------------------------------------------------------------
 
-    def open(self, n, focus_title=False):
+    def open(self, n, focus_title=False, direction=None):
         self.flush()
         self.note = n
         self.app.settings["open_note"] = n["id"]
@@ -2401,7 +2628,7 @@ class NotesView:
         bar.pack(fill="x", padx=PAD, pady=(0, 6))
         back = tk.Label(bar, text="‹  ALL NOTES", font=F["small_b"], fg=C["muted"], bg=C["bg"], cursor="hand2")
         back.pack(side="left")
-        back.bind("<Button-1>", lambda e: self.app.transition(self.show_list))
+        back.bind("<Button-1>", lambda e: self.show_list(direction=-1))
 
         self.tools = {}
         for key, label, fnt, tip in (("bullet", "• ≡", F["small_b"], "Bullet list"),
@@ -2452,6 +2679,7 @@ class NotesView:
         for seq in ("<Control-b>", "<Control-B>"):
             t.bind(seq, lambda e: (self.tool("b"), "break")[1])
 
+        self.slider.present(self.parent, direction)
         (self.title if focus_title else t).focus_set()
         if not focus_title:
             t.mark_set("insert", "end-1c")
