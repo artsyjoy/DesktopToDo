@@ -51,6 +51,14 @@ Inspired by Rivian's app: light grey / dark grey surfaces, one orange accent, pi
 - Everything (tasks, notes, settings, last weather) is saved to `%APPDATA%\DeskTodo\data.json` as you go,
   so closing and reopening the app — or replacing the .exe with a new version — keeps all of it.
 
+## How it's built
+
+- `desktodo.pyw` opens a frameless, rounded window drawn by **Microsoft Edge WebView2** (via
+  [pywebview](https://pywebview.flowrl.com)), so scrolling and every transition are GPU-accelerated.
+- `ui/` holds the interface (HTML, CSS, JavaScript) and the bundled fonts.
+- `core.py` holds everything else: saving, midnight roll-over, weather and Outlook calendar parsing.
+- `legacy/desktodo_tk.pyw` is the earlier tkinter version, kept for reference.
+
 ## Get it running
 
 **Option A — the app (no install needed).**
@@ -67,8 +75,8 @@ Protection history**, choose the DeskTodo entry → **Actions → Restore**. You
 false positive at https://www.microsoft.com/wdsi/filesubmission so Defender learns it is safe.
 
 **Option B — with Python.**
-Install Python from python.org (tick "Add to PATH"), then double-click `desktodo.pyw`.
-Keep the `fonts` folder next to it.
+Install Python from python.org (tick "Add to PATH"), run `pip install pywebview`, then double-click
+`desktodo.pyw`. Keep the `ui` folder and `core.py` next to it.
 
 ## Start it with Windows
 

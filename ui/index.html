@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeskTodo</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell">
+  <header class="topbar pywebview-drag-region">
+    <nav class="seg tabs" id="tabs">
+      <span class="pill"></span>
+      <button data-tab="glance">At a glance</button>
+      <button data-tab="todo">To-do</button>
+      <button data-tab="notes">Notes</button>
+    </nav>
+    <div class="drag pywebview-drag-region"></div>
+    <button class="round" id="pin" title="Keep on top (Ctrl+T)">
+      <svg viewBox="0 0 14 14"><circle cx="7" cy="4.5" r="3.4" fill="currentColor"/><path d="M7 7.5v5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+    <button class="round" id="theme" title="Light / dark"></button>
+    <button class="round" id="close" title="Close">
+      <svg viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </header>
+  <main class="views" id="views"></main>
+</div>
+<div class="grip" id="grip"><svg viewBox="0 0 16 16"><path d="M15 5L5 15M15 9l-6 6M15 13l-2 2" stroke="currentColor" stroke-width="1.2"/></svg></div>
+<script src="app.js"></script>
+</body>
+</html>
