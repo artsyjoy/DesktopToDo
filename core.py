@@ -615,8 +615,11 @@ def selftest():
         for c in DEFAULT_CITIES:
             w = fetch_weather(c["lat"], c["lon"])
             print("weather:", c["name"], w)
-    except Exception as exc:
-        print("FAIL network:", exc)
+    except OSError as exc:
+        # The weather service dropping a connection is outside our control: warn, don't fail the build.
+        print("WARN network unavailable, live weather not checked:", exc)
+    except Exception as exc:  # the service answered but we couldn't read it: that is a real failure
+        print("FAIL weather data:", repr(exc))
         ok = False
     print("SELFTEST", "OK" if ok else "FAILED")
     return ok
