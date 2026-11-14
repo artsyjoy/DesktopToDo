@@ -154,6 +154,8 @@ PAD = 22        # outer padding left/right
 GAP = 10        # space between cards
 RADIUS = 16     # card corner radius
 CARD_PAD = 16   # padding inside cards
+TOP = 18        # space above the tab bar
+BELOW_TABS = 26 # breathing room between the tab bar and every screen's content
 
 
 def setup_fonts(root):
@@ -533,7 +535,7 @@ class App:
                             highlightbackground=C["line"], highlightcolor=C["line"])
 
         top = tk.Frame(self.root, bg=C["bg"], cursor="fleur" if self.widget else "")
-        top.pack(fill="x", padx=22, pady=(14, 0))
+        top.pack(fill="x", padx=PAD, pady=(TOP, 0))
         if self.widget:
             top.bind("<ButtonPress-1>", self._drag_start)
             top.bind("<B1-Motion>", self._drag_move)
@@ -592,7 +594,7 @@ class App:
             grip.bind("<B1-Motion>", self._resize_move)
 
         self.body = tk.Frame(self.root, bg=C["bg"])
-        self.body.pack(fill="both", expand=True)
+        self.body.pack(fill="both", expand=True, pady=(BELOW_TABS, 0))
         self.view = {"todo": TodoView, "notes": NotesView, "glance": GlanceView}[self.tab](self, self.body)
 
 
@@ -689,7 +691,7 @@ class TodoView:
         self.clock_lbl = None
 
         self.scroll = ScrollArea(parent, self.C, on_width=self.rewrap)
-        self.scroll.pack(fill="both", expand=True, pady=(6, 0))
+        self.scroll.pack(fill="both", expand=True)
         self.render(top=True)
         self.root.after(15_000, self.tick_clock)
 
@@ -763,7 +765,7 @@ class TodoView:
         sec.pack(fill="x", padx=22)
 
         head = tk.Frame(sec, bg=bg, cursor="hand2")
-        head.pack(fill="x", pady=(14 if i else 6, 14 if not is_open else 0))
+        head.pack(fill="x", pady=(14 if i else 0, 14 if not is_open else 0))
         name = tk.Label(head, text=d.strftime("%A").upper(), font=F["day"], fg=C["text"], bg=bg)
         name.pack(side="left")
         clickers = [outer, head, name]
@@ -1448,20 +1450,22 @@ class GlanceView:
         self.wraps = []
         C, F = self.C, self.F
         wrap = tk.Frame(self.scroll.inner, bg=C["bg"])
-        wrap.pack(fill="x", padx=PAD, pady=(10, 24))
+        wrap.pack(fill="x", padx=PAD, pady=(0, 24))
 
         # clock
         self.date_lbl = tk.Label(wrap, font=F["small_b"], fg=C["muted"], bg=C["bg"])
         self.date_lbl.pack(anchor="w")
         row = tk.Frame(wrap, bg=C["bg"])
         row.pack(fill="x")
-        self.clock_lbl = tk.Label(row, font=F["clock"], fg=C["text"], bg=C["bg"], bd=0, padx=0, pady=0)
-        self.clock_lbl.pack(side="left")
+        row.pack_configure(pady=(10, 12))
+        # drawn on a canvas so the digits get even spacing and don't jump around every second
+        self.clock_cv = tk.Canvas(row, height=10, width=10, bg=C["bg"], highlightthickness=0, bd=0)
+        self.clock_cv.pack(side="left")
         self.ampm_lbl = tk.Label(row, font=F["tab"], fg=C["muted"], bg=C["bg"])
-        self.ampm_lbl.pack(side="left", anchor="s", pady=(0, 16), padx=(4, 0))
+        self.ampm_lbl.pack(side="left", anchor="s", pady=(0, 10), padx=(8, 0))
 
         info = tk.Frame(wrap, bg=C["bg"])
-        info.pack(fill="x", pady=(0, GAP + 2))
+        info.pack(fill="x", pady=(0, 20))
         self.sun_lbl = tk.Label(info, font=F["small"], fg=C["muted"], bg=C["bg"])
         self.sun_lbl.pack(side="left")
         tog = tk.Frame(info, bg=C["chip"])
@@ -1630,10 +1634,15 @@ class GlanceView:
 
     def on_width(self, width):
         self.width = width
-        avail = max(150, width - 2 * PAD - (44 if not self.h24 else 0))
-        sample = "00:00:00"
-        size = int(100 * avail / max(1, self.measure.measure(sample)))
-        self.F["clock"].configure(size=max(28, min(90, size)))
+        # the clock fills ~88% of the free width, leaving air on the right
+        avail = max(150, (width - 2 * PAD - (48 if not self.h24 else 0)) * 0.88)
+        size = int(100 * avail / max(1, self.clock_width(self.measure)))
+        self.F["clock"].configure(size=max(28, min(84, size)))
+        if hasattr(self, "clock_cv"):
+            try:
+                self.update_clock()
+            except tk.TclError:
+                pass
         inner = width - 2 * PAD - 2 * CARD_PAD
         self.wraps = [(l, k) for l, k in self.wraps if l.winfo_exists()]
         for lbl, kind in self.wraps:
@@ -1830,7 +1839,7 @@ class GlanceView:
 
     def update_clock(self):
         now = datetime.now()
-        self.clock_lbl.config(text=now.strftime("%H:%M:%S" if self.h24 else "%I:%M:%S"))
+        self.draw_clock(now.strftime("%H:%M:%S" if self.h24 else "%I:%M:%S"))
         self.ampm_lbl.config(text="" if self.h24 else now.strftime("%p"))
         self.date_lbl.config(text=f"{now:%A}, {now:%B} {now.day}".upper())
         w = self.cache["weather"].get(city_key(self.settings["cities"][0])) if self.settings["cities"] else None
@@ -1842,6 +1851,31 @@ class GlanceView:
                                          f"  ({mins // 60}h {mins % 60:02d}m)")
             except ValueError:
                 pass
+
+    @staticmethod
+    def clock_metrics(font):
+        digit = max(font.measure(str(n)) for n in range(10))  # same width for every digit
+        size = abs(font.actual("size")) or 50
+        return digit, font.measure(":"), size * 0.07           # last value: extra letter spacing
+
+    def clock_width(self, font, text="00:00:00"):
+        digit, colon, track = self.clock_metrics(font)
+        return sum(colon if ch == ":" else digit for ch in text) + track * (len(text) - 1)
+
+    def draw_clock(self, text):
+        cv, font, C = self.clock_cv, self.F["clock"], self.C
+        digit, colon, track = self.clock_metrics(font)
+        asc, desc = font.metrics("ascent"), font.metrics("descent")
+        h = asc + desc
+        cv.delete("all")
+        x = 0
+        for ch in text:
+            w = colon if ch == ":" else digit
+            cv.create_text(x + w / 2, h / 2, text=ch, font=font, anchor="center",
+                           fill=C["muted"] if ch == ":" else C["text"])
+            x += w + track
+        cv.config(width=int(x - track) + 2, height=int(h * 0.86))
+        cv.move("all", 0, -int(h * 0.07))  # trim the font's built-in space above the digits
 
     def set_24(self, v):
         self.settings["clock24"] = v
@@ -2075,7 +2109,7 @@ class NotesView:
         C, F = self.C, self.F
 
         head = tk.Frame(self.parent, bg=C["bg"])
-        head.pack(fill="x", padx=PAD, pady=(16, GAP + 2))
+        head.pack(fill="x", padx=PAD, pady=(0, GAP + 6))
         tk.Label(head, text="NOTES", font=F["day"], fg=C["text"], bg=C["bg"]).pack(side="left")
         pill(head, "+ NEW", self.new_note, C, F).pack(side="right")
 
@@ -2155,7 +2189,7 @@ class NotesView:
         C, F = self.C, self.F
 
         bar = tk.Frame(self.parent, bg=C["bg"])
-        bar.pack(fill="x", padx=22, pady=(16, 6))
+        bar.pack(fill="x", padx=PAD, pady=(0, 6))
         back = tk.Label(bar, text="‹  ALL NOTES", font=F["small_b"], fg=C["muted"], bg=C["bg"], cursor="hand2")
         back.pack(side="left")
         back.bind("<Button-1>", lambda e: self.show_list())
