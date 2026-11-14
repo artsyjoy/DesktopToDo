@@ -2,7 +2,7 @@ name: Build DeskTodo for Windows
 
 on:
   push:
-    paths: ["desktodo.pyw", "fonts/**", "assets/**", "version_info.txt", ".github/workflows/build-windows.yml"]
+    paths: ["desktodo.pyw", "fonts/**", "assets/**", "store/**", "version_info.txt", ".github/workflows/build-windows.yml"]
   workflow_dispatch:
 
 jobs:
@@ -51,3 +51,22 @@ jobs:
         with:
           name: DeskTodo-windows
           path: dist/DeskTodo/
+
+      # ---- Microsoft Store package (MSIX). The Store signs it on upload. ----
+      - name: Stage MSIX layout
+        run: python store/make_package.py ${{ github.run_number }}
+
+      - name: Pack MSIX
+        shell: pwsh
+        run: |
+          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" |
+                      Sort-Object FullName | Select-Object -Last 1
+          if (-not $makeappx) { Write-Error "makeappx.exe not found"; exit 1 }
+          & $makeappx.FullName pack /d build\msix /p dist\DeskTodo.msix /o
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item dist\DeskTodo.msix | Format-List Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DeskTodo-store-package
+          path: dist/DeskTodo.msix

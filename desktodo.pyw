@@ -206,11 +206,14 @@ def setup_fonts(root):
         "small_b": F(root, family=semi, size=9, weight=semi_w),
         "note_title": F(root, family=semi, size=12, weight=semi_w),
         "icon": F(root, family=body, size=14),
-        "clock": F(root, family=semi, size=56, weight=semi_w),  # bolder than the other big numbers
+        # the clock gets its own wide geometric face (Space Grotesk), set big and tight
+        "clock": F(root, family="Space Grotesk Medium", size=56) if "Space Grotesk Medium" in fams
+        else F(root, family=semi, size=56, weight=semi_w),
         "temp": F(root, family=light, size=32),
         "hero": F(root, family=light, size=46),
         "date": F(root, family=semi, size=14, weight=semi_w),  # 150% of the small labels
         "stat": F(root, family=light, size=20),
+        "small_stat": F(root, family=body, size=12),
         "month": F(root, family=heavy, size=40, weight=heavy_w),
         "year": F(root, family=semi, size=15, weight=semi_w),
         "cal": F(root, family=semi, size=13, weight=semi_w),
@@ -757,9 +760,61 @@ class App:
             (("✓ " if on_top else "    ") + "Keep on top", self.toggle_on_top),
             ("Show window frame" if self.widget else "Hide window frame (widget look)", self.toggle_frame),
             (None, None),
+            ("Export backup...", self.export_backup),
+            ("Import backup...", self.import_backup),
+            (None, None),
             ("Close DeskTodo", self.on_close),
         ]
         menu(self.root, self.C, items).tk_popup(e.x_root, e.y_root)
+
+    def export_backup(self):
+        """Save tasks, notes and settings to a file you choose (e.g. to move them to another copy)."""
+        from tkinter import filedialog
+        self.leaving()
+        path = filedialog.asksaveasfilename(
+            parent=self.root, title="Export DeskTodo backup", defaultextension=".json",
+            initialfile=f"DeskTodo backup {date.today().isoformat()}.json",
+            initialdir=os.path.join(os.path.expanduser("~"), "Documents"),
+            filetypes=[("DeskTodo backup", "*.json")])
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, indent=1, ensure_ascii=False)
+            messagebox.showinfo(APP_NAME, "Backup saved.", parent=self.root)
+        except OSError as exc:
+            messagebox.showerror(APP_NAME, f"Couldn't save the backup:\n{exc}", parent=self.root)
+
+    def import_backup(self):
+        """Replace everything with a backup file (asks first)."""
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=self.root, title="Import DeskTodo backup",
+            initialdir=os.path.join(os.path.expanduser("~"), "Documents"),
+            filetypes=[("DeskTodo backup", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                new = json.load(f)
+            if not isinstance(new, dict) or "days" not in new or "notes" not in new:
+                raise ValueError("That file isn't a DeskTodo backup.")
+        except (OSError, ValueError) as exc:
+            messagebox.showerror(APP_NAME, f"Couldn't read the backup:\n{exc}", parent=self.root)
+            return
+        n_tasks = sum(len(v) for v in new["days"].values())
+        if not messagebox.askyesno(APP_NAME, f"Replace your current tasks and notes with this backup?\n\n"
+                                             f"It has {n_tasks} tasks and {len(new['notes'])} notes.",
+                                   parent=self.root):
+            return
+        self.leaving()
+        new.setdefault("settings", {})
+        new["settings"]["geometry"] = self.root.geometry()
+        self.data.clear()
+        self.data.update(new)
+        self.settings = self.data["settings"]
+        self.persist()
+        self.build()
 
     @property
     def C(self):
@@ -1775,19 +1830,21 @@ class GlanceView:
         wrap = tk.Frame(self.scroll.inner, bg=C["bg"])
         wrap.pack(fill="x", padx=PAD, pady=(0, 24))
 
-        # centred clock, like the range readout in Rivian's app
+        # date, then a full-width clock, then a quiet info row (sun times left, 12h/24h right)
         self.date_lbl = tk.Label(wrap, font=F["date"], fg=C["text"], bg=C["bg"])
-        self.date_lbl.pack()
+        self.date_lbl.pack(anchor="w")
         row = tk.Frame(wrap, bg=C["bg"])
-        row.pack(pady=(6, 8))
+        row.pack(fill="x", pady=(4, 10))
         self.clock_cv = tk.Canvas(row, height=10, width=10, bg=C["bg"], highlightthickness=0, bd=0)
         self.clock_cv.pack(side="left")
         self.ampm_lbl = tk.Label(row, font=F["tab"], fg=C["muted"], bg=C["bg"])
-        self.ampm_lbl.pack(side="left", anchor="s", pady=(0, 10), padx=(6, 0))
-        self.sun_lbl = tk.Label(wrap, font=F["small"], fg=C["muted"], bg=C["bg"])
-        self.sun_lbl.pack()
-        Segmented(wrap, [("12", "12h"), ("24", "24h")], "24" if self.h24 else "12",
-                  lambda k: self.set_24(k == "24"), C, F["small_b"], C["bg"], height=26, pad_x=10).pack(pady=(12, 24))
+        self.ampm_lbl.pack(side="left", anchor="s", pady=(0, 6), padx=(6, 0))
+        info = tk.Frame(wrap, bg=C["bg"])
+        info.pack(fill="x", pady=(0, 22))
+        self.sun_lbl = tk.Label(info, font=F["small"], fg=C["muted"], bg=C["bg"], anchor="w", justify="left")
+        self.sun_lbl.pack(side="left", anchor="s")
+        Segmented(info, [("12", "12h"), ("24", "24h")], "24" if self.h24 else "12",
+                  lambda k: self.set_24(k == "24"), C, F["small_b"], C["bg"], height=26, pad_x=10).pack(side="right")
 
         # hero tiles (like Climate / Energy)
         tiles = tk.Frame(wrap, bg=C["bg"])
@@ -1800,9 +1857,6 @@ class GlanceView:
         self.pairs.append((a, b))
 
         self.weather_card(wrap).pack(fill="x", pady=(GAP, 0))
-        stats = self.weather_stats(wrap)
-        if stats is not None:
-            stats.pack(fill="x", pady=(GAP, 0))
         self.calendar_card(wrap).pack(fill="x", pady=(GAP, 0))
         self.events_card(wrap).pack(fill="x", pady=(GAP, 0))
 
@@ -1937,6 +1991,7 @@ class GlanceView:
         tk.Label(card.inner, text=f"Feels like {self.to_unit(w.get('feels'))}   ·   "
                                   f"H {self.to_unit(w['hi'])}  L {self.to_unit(w['lo'])}",
                  font=F["small"], fg=C["muted"], bg=fill).pack(anchor="w", pady=(2, 0))
+        self.weather_details(card.inner, w, fill)
 
         hours = w.get("hourly") or []
         if hours:
@@ -1955,38 +2010,27 @@ class GlanceView:
                 tk.Label(strip, text=self.to_unit(h["temp"]), font=F["small_b"], fg=C["text"], bg=fill).grid(row=2, column=c)
         return card
 
-    def weather_stats(self, parent):
+    def weather_details(self, parent, w, fill):
+        """Humidity / wind / rain / UV as a compact row inside the weather card."""
         C, F = self.C, self.F
-        _, city = self.selected_city()
-        w = self.cache["weather"].get(city_key(city))
-        if not w or w.get("humidity") is None:
-            return None  # older cached data or a missing reading: skip the detail tiles
+        if w.get("humidity") is None:
+            return
         uv = w.get("uv")
-        uv_word = "–" if uv is None else ("Low" if uv < 3 else "Moderate" if uv < 6 else "High" if uv < 8
-                                               else "Very high" if uv < 11 else "Extreme")
+        uv_word = "\u2013" if uv is None else ("Low" if uv < 3 else "Mod." if uv < 6 else "High" if uv < 8
+                                               else "V. high" if uv < 11 else "Extreme")
         dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
         wdir = dirs[round((w.get("wind_dir") or 0) / 45) % 8]
-        stats = [("Humidity", f"{round(w['humidity'])}%", ""),
-                 ("Wind", self.unit_speed(w.get("wind")), f"Gusts {self.unit_speed(w.get('gust'))} · {wdir}"),
-                 ("Precipitation", f"{round(w.get('pop') or 0)}%", "Chance today"),
-                 ("UV index", uv_word, "" if uv is None else f"Max {uv:.0f}")]
-        grid = tk.Frame(parent, bg=C["bg"])
-        grid.columnconfigure(0, weight=1, uniform="s")
-        grid.columnconfigure(1, weight=1, uniform="s")
-        cards = []
-        for i, (name, value, sub) in enumerate(stats):
-            card = Card(grid, C["bg"], C["card"])
-            tk.Label(card.inner, text=name, font=F["small"], fg=C["muted"], bg=C["card"]).pack(anchor="w")
-            tk.Label(card.inner, text=value, font=F["stat"], fg=C["text"], bg=C["card"]).pack(anchor="w", pady=(6, 0))
-            s = tk.Label(card.inner, text=sub, font=F["small"], fg=C["muted"], bg=C["card"], anchor="w", justify="left")
-            s.pack(fill="x")
-            self.wraps.append((s, "half"))
-            r, c = divmod(i, 2)
-            card.grid(row=r, column=c, sticky="nsew", padx=(0, GAP // 2) if c == 0 else (GAP // 2, 0),
-                      pady=(0, GAP) if r == 0 else 0)
-            cards.append(card)
-        self.pairs += [(cards[0], cards[1]), (cards[2], cards[3])]
-        return grid
+        stats = [("Humidity", f"{round(w['humidity'])}%"),
+                 ("Wind", f"{self.unit_speed(w.get('wind'))} {wdir}"),
+                 ("Rain", f"{round(w.get('pop') or 0)}%"),
+                 ("UV", uv_word)]
+        tk.Frame(parent, height=1, bg=C["line"]).pack(fill="x", pady=(14, 10))
+        row = tk.Frame(parent, bg=fill)
+        row.pack(fill="x")
+        for c, (name, value) in enumerate(stats):
+            row.columnconfigure(c, weight=1, uniform="ws")
+            tk.Label(row, text=name, font=F["small"], fg=C["muted"], bg=fill).grid(row=0, column=c, sticky="w")
+            tk.Label(row, text=value, font=F["small_stat"], fg=C["text"], bg=fill).grid(row=1, column=c, sticky="w")
 
     def events_card(self, parent):
         C, F = self.C, self.F
@@ -2057,9 +2101,9 @@ class GlanceView:
     def on_width(self, width):
         self.width = width
         # the clock fills ~88% of the free width, leaving air on the right
-        avail = max(150, (width - 2 * PAD - (48 if not self.h24 else 0)) * 0.80)
+        avail = max(150, (width - 2 * PAD - (44 if not self.h24 else 0)) * 0.99)  # full width, like the reference
         size = int(100 * avail / max(1, self.clock_width(self.measure)))
-        self.F["clock"].configure(size=max(28, min(84, size)))
+        self.F["clock"].configure(size=max(28, min(120, size)))
         if hasattr(self, "clock_cv"):
             try:
                 self.update_clock()
@@ -2279,8 +2323,8 @@ class GlanceView:
             try:
                 sr, ss = datetime.fromisoformat(w["sunrise"]), datetime.fromisoformat(w["sunset"])
                 mins = int((ss - sr).total_seconds() // 60)
-                self.sun_lbl.config(text=f"Sunrise {fmt_time(sr, self.h24)}   ·   Sunset {fmt_time(ss, self.h24)}"
-                                         f"   ·   {mins // 60}h {mins % 60:02d}m daylight")
+                self.sun_lbl.config(text=f"Sun  {fmt_time(sr, self.h24)} – {fmt_time(ss, self.h24)}"
+                                         f"  ({mins // 60}h {mins % 60:02d}m)")
             except ValueError:
                 pass
 
@@ -2288,7 +2332,7 @@ class GlanceView:
     def clock_metrics(font):
         digit = max(font.measure(str(n)) for n in range(10))  # same width for every digit
         size = abs(font.actual("size")) or 50
-        return digit, font.measure(":"), size * 0.07           # last value: extra letter spacing
+        return digit, font.measure(":"), -size * 0.02          # last value: letter spacing (tight)
 
     def clock_width(self, font, text="00:00:00"):
         digit, colon, track = self.clock_metrics(font)
@@ -2304,10 +2348,10 @@ class GlanceView:
         for ch in text:
             w = colon if ch == ":" else digit
             cv.create_text(x + w / 2, h / 2, text=ch, font=font, anchor="center",
-                           fill=C["muted"] if ch == ":" else C["text"])
+                           fill=C["text"])
             x += w + track
-        cv.config(width=int(x - track) + 2, height=int(h * 0.86))
-        cv.move("all", 0, -int(h * 0.07))  # trim the font's built-in space above the digits
+        cv.config(width=int(x - track) + 2, height=int(h * 0.80))
+        cv.move("all", 0, -int(h * 0.10))  # trim the font's built-in space above the digits
 
     def set_24(self, v):
         self.settings["clock24"] = v
