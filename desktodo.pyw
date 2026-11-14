@@ -222,6 +222,11 @@ def explain_start_failure(exc):
         if message_box(msg, 0x41) == 1:  # OK / Cancel
             webbrowser.open(WEBVIEW2_URL)
         return
+    if "0x80131515" in str(exc):  # .NET won't load files marked as downloaded
+        message_box("Windows is blocking DeskTodo's files because they came from a downloaded zip.\n\n"
+                    "Fix: right-click the DeskTodo zip > Properties > tick Unblock > OK, then unzip it "
+                    "again and replace the DeskTodo folder.", 0x30)
+        return
     message_box("DeskTodo couldn't open its window.\n\n"
                 f"{type(exc).__name__}: {str(exc)[:300]}\n\n"
                 "If another DeskTodo is still running, close it (Task Manager > DeskTodo > End task) "
@@ -268,6 +273,26 @@ def main():
         sys.exit(1)
 
 
+def unblock_bundled_files():
+    """Clear Windows' "downloaded from the internet" mark from the app's own DLLs.
+
+    Files unzipped from a downloaded zip carry that mark unless the zip was unblocked first,
+    and .NET then refuses to load them (FileLoadException, HRESULT 0x80131515)."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return
+    cleared = 0
+    for root, _dirs, files in os.walk(core.resource_dir()):
+        for name in files:
+            if name.lower().endswith((".dll", ".exe", ".pyd")):
+                try:
+                    os.remove(os.path.join(root, name) + ":Zone.Identifier")
+                    cleared += 1
+                except OSError:
+                    pass  # no mark on this file
+    if cleared:
+        log.info("Cleared the downloaded-file mark from %d bundled files", cleared)
+
+
 def run():
     if sys.platform == "win32":
         try:
@@ -275,6 +300,7 @@ def run():
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
             pass
+    unblock_bundled_files()
 
     import webview
 

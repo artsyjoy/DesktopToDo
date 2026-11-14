@@ -73,6 +73,15 @@ jobs:
           --collect-data tzdata --hidden-import tzdata --collect-all webview
           desktodo.pyw
 
+      # Mark the app's files "downloaded from the internet", as unzipping a downloaded zip does,
+      # so the launch test below proves the app still opens for people who didn't unblock the zip.
+      - name: Simulate a downloaded zip
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist\DeskTodo -Recurse -File -Include *.dll, *.exe, *.pyd
+          foreach ($f in $files) { Set-Content -Path $f.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3" }
+          Write-Host "Marked $($files.Count) files as downloaded"
+
       # Launch the built app for real: the WebView2 window must open, render the UI and talk to Python.
       - name: Smoke-test the app window
         shell: pwsh
