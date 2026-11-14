@@ -124,7 +124,8 @@ class Api:
             min_h = int(440 * scale)
             mi = MONITORINFO(); mi.cbSize = ctypes.sizeof(MONITORINFO)
             u32.GetMonitorInfoW(u32.MonitorFromWindow(hwnd, 2), ctypes.byref(mi))
-            max_h = max(min_h, mi.rcWork.bottom - rect.top)           # stop at the bottom of the screen
+            # stop at the bottom of the screen, but never shrink just because the drag started
+            max_h = max(min_h, start_h, mi.rcWork.bottom - rect.top)
             flags = 0x0002 | 0x0004 | 0x0010 | 0x4000                 # no move, no z-order, no activate, async
             last = start_h
             while u32.GetAsyncKeyState(0x01) & 0x8000:                # until the mouse button is released
@@ -219,7 +220,13 @@ class Api:
         from ctypes import wintypes as wt
         u32 = ctypes.windll.user32
         u32.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+        u32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
         rect = wt.RECT()
+        u32.GetWindowRect(self._hwnd, ctypes.byref(rect))
+        # start from the top-left at a moderate height, so even a small test screen has room to grow
+        scale = (u32.GetDpiForWindow(self._hwnd) or 96) / 96
+        u32.SetWindowPos(self._hwnd, None, 20, 20, rect.right - rect.left, int(480 * scale), 0x0004 | 0x0010)
+        time.sleep(0.4)
         u32.GetWindowRect(self._hwnd, ctypes.byref(rect))
         before = rect.bottom - rect.top
         x, y = (rect.left + rect.right) // 2, rect.bottom + 5     # just below the window: clicks nothing in it
