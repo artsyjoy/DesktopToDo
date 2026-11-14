@@ -25,7 +25,7 @@ A to-do list, notes and "at a glance" dashboard that lives on your Windows deskt
 
 Inspired by Rivian's app: light grey / dark grey surfaces, one orange accent, pill switches and round buttons.
 
-- A big centred clock (12h / 24h switch) with the date, sunrise, sunset and hours of daylight.
+- A big, bold centred clock (24-hour by default; 12h / 24h switch) with the date, sunrise, sunset and hours of daylight.
 - **Up next** (orange tile): your next meeting and how soon it starts. **Tasks today** (dark tile): how many
   tasks are left; click it to open the To-do tab.
 - Weather for two places (Glenwood Springs and Basalt, CO to start); switch between them with the pill at the

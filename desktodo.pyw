@@ -202,7 +202,7 @@ def setup_fonts(root):
         "small_b": F(root, family=semi, size=9, weight=semi_w),
         "note_title": F(root, family=semi, size=12, weight=semi_w),
         "icon": F(root, family=body, size=14),
-        "clock": F(root, family=light, size=56),
+        "clock": F(root, family=semi, size=56, weight=semi_w),  # bolder than the other big numbers
         "temp": F(root, family=light, size=32),
         "hero": F(root, family=light, size=46),
         "stat": F(root, family=light, size=20),
@@ -443,10 +443,57 @@ class App:
         root.bind("<Control-Key-2>", lambda e: self.switch("todo"))
         root.bind("<Control-Key-3>", lambda e: self.switch("notes"))
 
+        self.animate = True
+        self._fading = False
         self.build()
         self.persist()
         self.root.after(15_000, self._tick)
         self.root.after(150, self._poll)
+        self.fade_in(start=0.0)  # gentle fade-in when the app opens
+
+    # ---- transitions -----------------------------------------------------------------
+
+    def _alpha(self, value):
+        try:
+            self.root.attributes("-alpha", value)
+            return True
+        except tk.TclError:
+            return False
+
+    def fade_in(self, start=0.82):
+        if not self.animate or not self._alpha(start):
+            return
+        # ease-out curve over ~180 ms
+        steps = [start + (1 - start) * (1 - (1 - k / 10) ** 3) for k in range(1, 11)]
+
+        def step(i=0):
+            if i < len(steps):
+                self._alpha(steps[i])
+                self.root.after(18, step, i + 1)
+            else:
+                self._alpha(1.0)
+                self._fading = False
+        step()
+
+    def transition(self, change):
+        """Cross-fade style change: dip the window's opacity, swap the content, fade back in."""
+        if not self.animate or self._fading or not self._alpha(1.0):
+            change()
+            return
+        self._fading = True
+        outs = [0.94, 0.87, 0.82]
+
+        def out(i=0):
+            if i < len(outs):
+                self._alpha(outs[i])
+                self.root.after(16, out, i + 1)
+            else:
+                try:
+                    change()
+                    self.root.update_idletasks()
+                finally:
+                    self.fade_in(0.82)
+        out()
 
     VIEWS = ("glance", "todo", "notes")
     TAB_LABELS = {"glance": "At a glance", "todo": "To-do", "notes": "Notes"}
@@ -644,19 +691,24 @@ class App:
     def switch(self, tab):
         if tab == self.tab:
             return
-        self.leaving()
-        self.tab = self.settings["tab"] = tab
-        self.build()
+
+        def change():
+            self.leaving()
+            self.tab = self.settings["tab"] = tab
+            self.build()
+        self.transition(change)
 
     def leaving(self):
         if self.view and hasattr(self.view, "flush"):
             self.view.flush()
 
     def toggle_theme(self):
-        self.leaving()
-        self.settings["theme"] = "light" if self.settings.get("theme", "dark") == "dark" else "dark"
-        self.persist()
-        self.build()
+        def change():
+            self.leaving()
+            self.settings["theme"] = "light" if self.settings.get("theme", "dark") == "dark" else "dark"
+            self.persist()
+            self.build()
+        self.transition(change)
 
     def toggle_on_top(self):
         self.settings["on_top"] = not self.settings.get("on_top", False)
@@ -748,9 +800,8 @@ class TodoView:
             return
         self.root.after(15_000, self.tick_clock)
 
-    @staticmethod
-    def today_line(d):
-        return f"{d:%B} {d.day}, {d.year}  —  {clock_text(datetime.now())}"
+    def today_line(self, d):
+        return f"{d:%B} {d.day}, {d.year}  —  {fmt_time(datetime.now(), self.app.settings.get('clock24', True))}"
 
     def day_bg(self, i):
         return section_bg(self.C, self.app.settings.get("theme", "dark") == "dark", i)
@@ -1492,7 +1543,7 @@ class GlanceView:
 
     @property
     def h24(self):
-        return bool(self.settings.get("clock24"))
+        return bool(self.settings.get("clock24", True))  # 24-hour by default
 
     def to_unit(self, c):
         if c is None:
@@ -2311,7 +2362,7 @@ class NotesView:
         prev.pack(fill="x", pady=(4, 0))
         self.previews.append(prev)
         for w in (card, card.inner, top, title, when, prev):
-            w.bind("<Button-1>", lambda e: self.open(n))
+            w.bind("<Button-1>", lambda e: self.app.transition(lambda: self.open(n)))
         dele.bind("<Button-1>", lambda e: self.delete(n))
         bind_hover(card, lambda: dele.config(fg=C["muted"]), lambda: dele.config(fg=fill))
 
@@ -2350,7 +2401,7 @@ class NotesView:
         bar.pack(fill="x", padx=PAD, pady=(0, 6))
         back = tk.Label(bar, text="‹  ALL NOTES", font=F["small_b"], fg=C["muted"], bg=C["bg"], cursor="hand2")
         back.pack(side="left")
-        back.bind("<Button-1>", lambda e: self.show_list())
+        back.bind("<Button-1>", lambda e: self.app.transition(self.show_list))
 
         self.tools = {}
         for key, label, fnt, tip in (("bullet", "• ≡", F["small_b"], "Bullet list"),
