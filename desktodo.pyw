@@ -228,10 +228,7 @@ class ScrollArea(tk.Frame):
         self.canvas.bind("<Configure>", self._resize)
 
     def _autoscroll(self, first, last):
-        if float(first) <= 0.0 and float(last) >= 1.0:
-            self.bar.pack_forget()
-        elif not self.bar.winfo_ismapped():
-            self.bar.pack(side="right", fill="y", before=self.canvas)
+        # No visible scrollbar (cleaner widget look): the mouse wheel scrolls.
         self.bar.set(first, last)
 
     def _resize(self, event):
@@ -287,9 +284,11 @@ class App:
 
         root.title(APP_NAME)
         root.minsize(320, 420)
-        root.geometry(self.settings.get("geometry", "400x720"))
+        root.geometry(self.safe_geometry(self.settings.get("geometry", "400x720")))
         root.attributes("-topmost", bool(self.settings.get("on_top", False)))
         root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._drag = self._rs = None
+        self.apply_frame()
 
         root.bind_all("<MouseWheel>", self._wheel)
         root.bind_all("<Button-4>", lambda e: self._wheel(e, -1))
@@ -300,7 +299,92 @@ class App:
 
         self.build()
         self.persist()
-        self.root.after(60_000, self._tick)
+        self.root.after(15_000, self._tick)
+
+    # ---- widget mode (no title bar) -----------------------------------------------
+
+    @property
+    def widget(self):
+        return self.settings.get("widget", True)
+
+    def apply_frame(self):
+        self.root.overrideredirect(self.widget)
+        if sys.platform == "win32":
+            self.root.after(20, self._win_style)
+
+    def _win_style(self):
+        """Keep a taskbar button while borderless, and ask Windows 11 for rounded corners."""
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetParent(self.root.winfo_id())
+            if self.widget:
+                GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x80, 0x40000
+                style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, (style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW)
+            pref = ctypes.c_int(2)  # DWMWCP_ROUND
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+            self.root.withdraw()
+            self.root.after(10, self.root.deiconify)
+            self.root.after(60, self.root.focus_force)
+        except Exception:
+            pass
+
+    def toggle_frame(self):
+        self.settings["widget"] = not self.widget
+        self.persist()
+        self.apply_frame()
+        self.leaving()
+        self.build()
+
+    def safe_geometry(self, geo):
+        """Make sure a saved position is still on a screen (e.g. after unplugging a monitor)."""
+        try:
+            size, _, pos = geo.partition("+")
+            w, h = (int(v) for v in size.split("x"))
+            if not pos:
+                return geo
+            x, y = (int(v) for v in pos.split("+")[:2])
+        except ValueError:
+            return "400x720"
+        left, top = 0, 0
+        right, bottom = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                gm = ctypes.windll.user32.GetSystemMetrics
+                left, top = gm(76), gm(77)
+                right, bottom = left + gm(78), top + gm(79)
+            except Exception:
+                pass
+        x = min(max(x, left), max(left, right - 120))
+        y = min(max(y, top), max(top, bottom - 120))
+        return f"{w}x{h}+{x}+{y}"
+
+    def _drag_start(self, e):
+        self._drag = (e.x_root - self.root.winfo_x(), e.y_root - self.root.winfo_y())
+
+    def _drag_move(self, e):
+        if self._drag:
+            self.root.geometry(f"+{e.x_root - self._drag[0]}+{e.y_root - self._drag[1]}")
+
+    def _resize_start(self, e):
+        self._rs = (e.x_root, e.y_root, self.root.winfo_width(), self.root.winfo_height())
+
+    def _resize_move(self, e):
+        if self._rs:
+            x0, y0, w0, h0 = self._rs
+            self.root.geometry(f"{max(320, w0 + e.x_root - x0)}x{max(420, h0 + e.y_root - y0)}")
+
+    def window_menu(self, e):
+        on_top = self.settings.get("on_top")
+        items = [
+            (("✓ " if on_top else "    ") + "Keep on top", self.toggle_on_top),
+            ("Show window frame" if self.widget else "Hide window frame (widget look)", self.toggle_frame),
+            (None, None),
+            ("Close DeskTodo", self.on_close),
+        ]
+        menu(self.root, self.C, items).tk_popup(e.x_root, e.y_root)
 
     @property
     def C(self):
@@ -312,10 +396,24 @@ class App:
         for w in self.root.winfo_children():
             w.destroy()
         C = self.C
-        self.root.configure(bg=C["bg"])
+        border = 1 if self.widget else 0
+        self.root.configure(bg=C["bg"], highlightthickness=border,
+                            highlightbackground=C["line"], highlightcolor=C["line"])
 
-        top = tk.Frame(self.root, bg=C["bg"])
+        top = tk.Frame(self.root, bg=C["bg"], cursor="fleur" if self.widget else "")
         top.pack(fill="x", padx=22, pady=(14, 0))
+        if self.widget:
+            top.bind("<ButtonPress-1>", self._drag_start)
+            top.bind("<B1-Motion>", self._drag_move)
+        top.bind("<Button-3>", self.window_menu)
+
+        if self.widget:
+            close = tk.Label(top, text="×", font=self.F["icon"], fg=C["faint"], bg=C["bg"],
+                             cursor="hand2", padx=2)
+            close.pack(side="right", padx=(10, 0))
+            close.bind("<Button-1>", lambda e: self.on_close())
+            close.bind("<Enter>", lambda e: close.config(fg=C["accent"]))
+            close.bind("<Leave>", lambda e: close.config(fg=C["faint"]))
         for key, label in (("todo", "TO-DO"), ("notes", "NOTES")):
             on = key == self.tab
             box = tk.Frame(top, bg=C["bg"])
@@ -346,9 +444,25 @@ class App:
         pin.pack(side="right", padx=(0, 12))
         pin.bind("<Button-1>", lambda e: self.toggle_on_top())
 
+        if self.widget:  # thin bottom strip with a resize handle in the corner
+            strip_bg = C["bg"]
+            if self.tab == "todo":
+                step = 0.045 if self.settings.get("theme") != "dark" else 0.075
+                strip_bg = shade(C["bg"], step * (TodoView.DAYS - 1))
+            strip = tk.Frame(self.root, bg=strip_bg, height=14)
+            strip.pack(side="bottom", fill="x")
+            grip = tk.Canvas(strip, width=14, height=14, highlightthickness=0, bg=strip_bg,
+                             cursor="size_nw_se" if sys.platform == "win32" else "bottom_right_corner")
+            for k in (4, 8, 12):
+                grip.create_line(13, k, k, 13, fill=C["faint"])
+            grip.pack(side="right")
+            grip.bind("<ButtonPress-1>", self._resize_start)
+            grip.bind("<B1-Motion>", self._resize_move)
+
         self.body = tk.Frame(self.root, bg=C["bg"])
         self.body.pack(fill="both", expand=True)
         self.view = (TodoView if self.tab == "todo" else NotesView)(self, self.body)
+
 
     def switch(self, tab):
         if tab == self.tab:
@@ -394,7 +508,7 @@ class App:
             if self.tab == "todo":
                 self.leaving()
                 self.build()
-        self.root.after(60_000, self._tick)
+        self.root.after(15_000, self._tick)
 
     def persist(self):
         try:
@@ -412,34 +526,52 @@ class App:
 # =========================================================================== to-do tab
 
 
+def shade(color, amount):
+    """Darken a #rrggbb colour by `amount` (0..1)."""
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    return "#%02x%02x%02x" % tuple(int(c * (1 - amount)) for c in (r, g, b))
+
+
+def clock_text(now):
+    return f"{now:%I}".lstrip("0") + f":{now:%M}" + f"{now:%p}".lower()
+
+
 class TodoView:
+    DAYS = 7  # today + the next six days
+
     def __init__(self, app, parent):
         self.app, self.C, self.F = app, app.C, app.F
         self.root = app.root
         self.today = date.fromisoformat(app.today)
-        self.week = self.today - timedelta(days=self.today.weekday())  # Monday
         self.open_day = app.today
         self.editing = None       # id of task being edited
         self.adding_sub = None    # id of task getting a new sub-task
         self.focus_add = False
         self.wrap_labels = []
+        self.clock_lbl = None
 
-        C = self.C
-        nav = tk.Frame(parent, bg=C["bg"])
-        nav.pack(fill="x", padx=22, pady=(14, 0))
-        prev = tk.Label(nav, text="‹", font=self.F["title"], fg=C["muted"], bg=C["bg"], cursor="hand2")
-        prev.pack(side="left")
-        prev.bind("<Button-1>", lambda e: self.shift_week(-1))
-        self.week_lbl = tk.Label(nav, font=self.F["small_b"], fg=C["muted"], bg=C["bg"], cursor="hand2")
-        self.week_lbl.pack(side="left", padx=8)
-        self.week_lbl.bind("<Button-1>", lambda e: self.shift_week(0))
-        nxt = tk.Label(nav, text="›", font=self.F["title"], fg=C["muted"], bg=C["bg"], cursor="hand2")
-        nxt.pack(side="left")
-        nxt.bind("<Button-1>", lambda e: self.shift_week(1))
-
-        self.scroll = ScrollArea(parent, C, on_width=self.rewrap)
-        self.scroll.pack(fill="both", expand=True, pady=(4, 0))
+        self.scroll = ScrollArea(parent, self.C, on_width=self.rewrap)
+        self.scroll.pack(fill="both", expand=True, pady=(6, 0))
         self.render(top=True)
+        self.root.after(15_000, self.tick_clock)
+
+    def tick_clock(self):
+        try:
+            if not self.scroll.winfo_exists():
+                return  # this view was replaced
+            if self.clock_lbl is not None and self.clock_lbl.winfo_exists():
+                self.clock_lbl.config(text=self.today_line(self.today))
+        except tk.TclError:
+            return
+        self.root.after(15_000, self.tick_clock)
+
+    @staticmethod
+    def today_line(d):
+        return f"{d:%B} {d.day}, {d.year}  —  {clock_text(datetime.now())}"
+
+    def day_bg(self, i):
+        step = 0.045 if self.app.settings.get("theme") != "dark" else 0.075
+        return shade(self.C["bg"], step * i)
 
     # ---- data helpers ----------------------------------------------------------
 
@@ -463,102 +595,83 @@ class TodoView:
 
     # ---- rendering -------------------------------------------------------------
 
-    def shift_week(self, n):
-        if n == 0:
-            self.week = self.today - timedelta(days=self.today.weekday())
-            self.open_day = self.today.isoformat()
-        else:
-            self.week += timedelta(weeks=n)
-            self.open_day = None
-        self.render(top=True)
-
     def render(self, top=False):
         y = self.scroll.canvas.yview()[0]
         for w in self.scroll.inner.winfo_children():
             w.destroy()
         self.wrap_labels = []
+        self.clock_lbl = None
 
-        end = self.week + timedelta(days=6)
-        this_week = self.week == self.today - timedelta(days=self.today.weekday())
-        rng = f"{self.week:%b} {self.week.day} – {end:%b} {end.day}"
-        self.week_lbl.config(text=("THIS WEEK  ·  " if this_week else "") + rng.upper())
-        self.open_section = None
-
-        for i in range(7):
-            self.render_day(self.week + timedelta(days=i), first=(i == 0))
-        tk.Frame(self.scroll.inner, height=1, bg=self.C["line"]).pack(fill="x")
-        tk.Frame(self.scroll.inner, height=30, bg=self.C["bg"]).pack(fill="x")
+        for i in range(self.DAYS):
+            self.render_day(self.today + timedelta(days=i), i)
+        # the last day's colour carries on to the bottom of the window
+        last = self.day_bg(self.DAYS - 1)
+        self.scroll.canvas.config(bg=last)
+        self.scroll.inner.config(bg=last)
 
         self.root.update_idletasks()
         self.rewrap(self.scroll.canvas.winfo_width())
-        if top and self.open_section is not None:
-            # bring the open day (usually today) into view
-            total = max(1, self.scroll.inner.winfo_height())
-            y = max(0, self.open_section.winfo_y() - 60) / total
-        elif top:
-            y = 0
-        self.scroll.canvas.yview_moveto(y)
+        self.scroll.canvas.yview_moveto(0 if top else y)
 
-    def render_day(self, d, first):
+    def render_day(self, d, i):
         C, F = self.C, self.F
+        bg = self.day_bg(i)
         iso = d.isoformat()
         is_open = iso == self.open_day
-        is_today = iso == self.today.isoformat()
         tasks = self.app.data["days"].get(iso, [])
 
-        tk.Frame(self.scroll.inner, height=1, bg=C["bg"] if first else C["line"]).pack(fill="x")
-        sec = tk.Frame(self.scroll.inner, bg=C["bg"])
+        outer = tk.Frame(self.scroll.inner, bg=bg)
+        outer.pack(fill="x")
+        sec = tk.Frame(outer, bg=bg)
         sec.pack(fill="x", padx=22)
-        if is_open:
-            self.open_section = sec
 
-        head = tk.Frame(sec, bg=C["bg"], cursor="hand2")
-        head.pack(fill="x", pady=(14, 14 if not is_open else 0))
-        name = tk.Label(head, text=d.strftime("%A").upper(), font=F["day"], fg=C["text"], bg=C["bg"])
+        head = tk.Frame(sec, bg=bg, cursor="hand2")
+        head.pack(fill="x", pady=(14 if i else 6, 14 if not is_open else 0))
+        name = tk.Label(head, text=d.strftime("%A").upper(), font=F["day"], fg=C["text"], bg=bg)
         name.pack(side="left")
-        clickers = [head, name]
+        clickers = [outer, head, name]
         if not is_open:
             left = sum(1 for t in tasks if not t["done"])
-            if is_today:
-                dot = tk.Canvas(head, width=10, height=10, bg=C["bg"], highlightthickness=0)
-                dot.create_oval(1, 1, 9, 9, fill=C["accent"], outline="")
-                dot.pack(side="left", padx=(8, 0))
-                clickers.append(dot)
             if left:
-                cnt = tk.Label(head, text=str(left), font=F["small_b"], fg=C["muted"], bg=C["bg"])
+                cnt = tk.Label(head, text=str(left), font=F["small_b"], fg=C["muted"], bg=bg)
                 cnt.pack(side="right")
                 clickers.append(cnt)
         for w in clickers:
-            w.bind("<Button-1>", lambda e, i=iso: self.toggle_day(i))
+            w.bind("<Button-1>", lambda e, k=iso: self.toggle_day(k))
 
         if not is_open:
             return
 
-        sub = f"{d:%B} {d.day}, {d.year}" + ("  —  Today" if is_today else "")
-        tk.Label(sec, text=sub, font=F["small"], fg=C["muted"], bg=C["bg"]).pack(anchor="w", pady=(0, 10))
+        if i == 0:
+            sub = tk.Label(sec, text=self.today_line(d), font=F["small"], fg=C["muted"], bg=bg)
+            self.clock_lbl = sub
+        else:
+            extra = "  —  Tomorrow" if i == 1 else ""
+            sub = tk.Label(sec, text=f"{d:%B} {d.day}, {d.year}{extra}", font=F["small"], fg=C["muted"], bg=bg)
+        sub.pack(anchor="w", pady=(0, 10))
 
         for t in tasks:
-            self.render_task(sec, t, depth=0)
+            self.render_task(sec, t, 0, bg)
             for c in t.get("children", []):
-                self.render_task(sec, c, depth=1, parent_task=t)
+                self.render_task(sec, c, 1, bg)
             if self.adding_sub == t["id"]:
-                self.render_sub_entry(sec, t)
+                self.render_sub_entry(sec, t, bg)
 
-        add = PlaceholderEntry(sec, "Add a new task...", C, font=F["body"], bg=C["bg"])
-        add.pack(fill="x", pady=(14, 18))
-        add.bind("<Return>", lambda e, i=iso, w=add: self.add_task(i, w))
+        add = PlaceholderEntry(sec, "Add a new task...", C, font=F["body"], bg=bg)
+        add.pack(fill="x", pady=(14, 22))
+        add.bind("<Return>", lambda e, k=iso, w=add: self.add_task(k, w))
         add.bind("<Escape>", lambda e: self.root.focus_set())
         if self.focus_add:
             self.focus_add = False
             add.focus_set()
 
-    def render_task(self, parent, t, depth, parent_task=None, **_):
+    def render_task(self, parent, t, depth, bg):
         C, F = self.C, self.F
-        row = tk.Frame(parent, bg=C["bg"])
+        row = tk.Frame(parent, bg=bg)
         row.pack(fill="x", pady=2, padx=(26 * depth, 0))
 
         size = 15 if depth == 0 else 13
-        chk = tk.Canvas(row, width=size + 2, height=size + 2, bg=C["bg"], highlightthickness=0, cursor="hand2")
+        chk = tk.Canvas(row, width=size + 2, height=size + 2, bg=bg, highlightthickness=0, cursor="hand2")
         chk.pack(side="left", anchor="n", pady=(3, 0), padx=(0, 9))
         if t["done"]:
             chk.create_rectangle(1, 1, size, size, fill=C["accent"], outline=C["accent"])
@@ -581,18 +694,18 @@ class TodoView:
             return
 
         actions = []
-        dele = tk.Label(row, text="×", font=F["icon"], fg=C["bg"], bg=C["bg"], cursor="hand2", padx=3)
+        dele = tk.Label(row, text="×", font=F["icon"], fg=bg, bg=bg, cursor="hand2", padx=3)
         dele.pack(side="right", anchor="n")
         dele.bind("<Button-1>", lambda e: self.delete(t["id"]))
         actions.append(dele)
         if depth == 0:
-            plus = tk.Label(row, text="+", font=F["icon"], fg=C["bg"], bg=C["bg"], cursor="hand2", padx=3)
+            plus = tk.Label(row, text="+", font=F["icon"], fg=bg, bg=bg, cursor="hand2", padx=3)
             plus.pack(side="right", anchor="n")
             plus.bind("<Button-1>", lambda e: self.start_sub(t["id"]))
             actions.append(plus)
 
         txt = tk.Label(row, text=t["text"], font=F["body_done"] if t["done"] else F["body"],
-                       fg=C["muted"] if t["done"] else C["text"], bg=C["bg"],
+                       fg=C["muted"] if t["done"] else C["text"], bg=bg,
                        anchor="w", justify="left", wraplength=250)
         txt.pack(side="left", fill="x", expand=True)
         self.wrap_labels.append((txt, 26 * depth))
@@ -608,15 +721,15 @@ class TodoView:
 
         def hide():
             for a in actions:
-                a.config(fg=C["bg"])
+                a.config(fg=bg)
         bind_hover(row, show, hide)
 
-    def render_sub_entry(self, parent, t):
+    def render_sub_entry(self, parent, t, bg):
         C = self.C
-        row = tk.Frame(parent, bg=C["bg"])
+        row = tk.Frame(parent, bg=bg)
         row.pack(fill="x", pady=2, padx=(26, 0))
-        tk.Label(row, text="↳", font=self.F["body"], fg=C["faint"], bg=C["bg"]).pack(side="left", padx=(0, 6))
-        e = PlaceholderEntry(row, "Add a sub-task...", C, font=self.F["body"], bg=C["bg"])
+        tk.Label(row, text="↳", font=self.F["body"], fg=C["faint"], bg=bg).pack(side="left", padx=(0, 6))
+        e = PlaceholderEntry(row, "Add a sub-task...", C, font=self.F["body"], bg=bg)
         e.pack(side="left", fill="x", expand=True)
         e.focus_set()
         e._focus_in()
@@ -884,7 +997,6 @@ class NotesView:
                                 padx=0, pady=4, spacing1=2, spacing3=2, undo=True, yscrollcommand=sb.set)
         sb.config(command=t.yview)
         t.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
 
         indent = F["body"].measure(BULLET)
         t.tag_configure("h", font=F["h"], spacing1=8, spacing3=4)

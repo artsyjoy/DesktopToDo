@@ -4,15 +4,16 @@ A weekly to-do list and notes app that lives on your Windows desktop. No website
 
 ## To-do tab
 
-- The week is laid out Monday to Sunday with big day headings. Today opens automatically; click any day to open it.
+- **Today is always at the top**, with the live time, followed by the next six days (each a shade darker).
+  Click any day to open it.
 - Type in **Add a new task...** and press **Enter**.
 - Tick the box to finish a task: it turns orange and gets struck through.
 - **Sub-tasks:** hover a task and click **+**, then type the sub-task (press Enter to add more, Esc to stop).
   Finishing a main task finishes its sub-tasks too.
 - **Double-click** a task to edit it. Hover and click **×** to delete it.
 - **Right-click** a task for more: move to the next day or to today, indent it under the task above, outdent a sub-task.
-- Unfinished tasks from earlier days move to today automatically.
-- Use the **‹ ›** arrows to look at other weeks. Click the week label to jump back to this week.
+- At midnight, unfinished tasks move to the new day automatically (if the PC was off or asleep,
+  this happens as soon as DeskTodo is running again).
 
 ## Notes tab
 
@@ -22,6 +23,9 @@ A weekly to-do list and notes app that lives on your Windows desktop. No website
 
 ## Everywhere
 
+- DeskTodo looks like a desktop widget: no title bar. **Drag the top bar** (the empty space next to the tabs)
+  to move it, drag the **bottom-right corner** to resize, and click **×** to close.
+- **Right-click the top bar** for: keep on top, show/hide the normal window frame, close.
 - Moon / sun icon: switch between light and dark themes.
 - **PIN** keeps the window on top of other windows (Ctrl+T).
 - Ctrl+1 / Ctrl+2 switch between To-do and Notes.
