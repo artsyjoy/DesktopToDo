@@ -66,7 +66,7 @@
     geocode: q => Promise.resolve({ ok: true, places: [
       { name: q.split(",")[0].trim() || "Aspen", region: "Colorado", country: "United States", lat: 39.19, lon: -106.82 }] }),
     open_url: url => { window.open(url, "_blank", "noopener"); },
-    report_size: () => null, begin_resize: () => null, set_on_top: () => null, close: () => null,
+    report_size: () => null, begin_resize: () => null, set_on_top: () => null, set_layer: () => null, close: () => null,
     export_backup: () => Promise.resolve({ ok: false, error: "Backups work in the desktop app" }),
     import_backup: () => Promise.resolve({ ok: false, error: "Backups work in the desktop app" }),
     log: m => console.warn("DeskTodo:", m),

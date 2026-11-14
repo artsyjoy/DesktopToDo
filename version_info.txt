@@ -1,8 +1,8 @@
 # Windows version resource for DeskTodo.exe (read by PyInstaller --version-file)
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 5, 5, 0),
-    prodvers=(1, 5, 5, 0),
+    filevers=(1, 5, 6, 0),
+    prodvers=(1, 5, 6, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -16,12 +16,12 @@ VSVersionInfo(
         '040904B0',
         [StringStruct('CompanyName', 'DeskTodo'),
          StringStruct('FileDescription', 'DeskTodo - to-do list, notes and at-a-glance widget'),
-         StringStruct('FileVersion', '1.5.5'),
+         StringStruct('FileVersion', '1.5.6'),
          StringStruct('InternalName', 'DeskTodo'),
          StringStruct('LegalCopyright', 'Personal use'),
          StringStruct('OriginalFilename', 'DeskTodo.exe'),
          StringStruct('ProductName', 'DeskTodo'),
-         StringStruct('ProductVersion', '1.5.5')])
+         StringStruct('ProductVersion', '1.5.6')])
     ]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]

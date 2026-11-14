@@ -48,6 +48,10 @@ class Api:
         self._lock = threading.Lock()
         self._hwnd = None          # native window handle, set once the window is shown
         self._resizing = False
+        s = self._data.setdefault("settings", {})
+        # where the widget lives; older versions only had "keep on top" (on_top)
+        self._layer = s.get("layer") or ("top" if s.get("on_top") else "desktop")
+        s["layer"] = self._layer
 
     # ---- data ------------------------------------------------------------------------
     def get_state(self):
@@ -141,8 +145,55 @@ class Api:
             self._resizing = False
 
     def set_on_top(self, on):
+        self.set_layer("top" if on else "desktop")
+
+    def set_layer(self, layer):
+        """Where the widget lives: "top" (above all apps), "desktop" (behind apps, like a desktop widget)
+        or "normal" (an ordinary window)."""
+        self._layer = layer if layer in ("top", "desktop", "normal") else "desktop"
         if self._window:
-            self._window.on_top = bool(on)
+            self._window.on_top = self._layer == "top"
+        log.info("Window layer: %s", self._layer)
+
+    def _layer_loop(self):
+        """Desktop mode: keep the widget behind other apps, and bring it back when the desktop is shown
+        (for example with Win+D). Runs in the background, a few times a second, using plain Win32 calls."""
+        import ctypes
+        import time
+        from ctypes import wintypes as wt
+        u32 = ctypes.windll.user32
+        u32.GetForegroundWindow.restype = wt.HWND
+        u32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+        u32.IsWindow.argtypes = u32.IsIconic.argtypes = u32.IsWindowVisible.argtypes = [wt.HWND]
+        u32.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
+        u32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
+        HWND_TOP, HWND_BOTTOM = 0, 1
+        KEEP = 0x0001 | 0x0002 | 0x0010            # no size, no move, no activate
+        name = ctypes.create_unicode_buffer(64)
+        state = None
+        while self._hwnd and u32.IsWindow(self._hwnd):
+            try:
+                if self._layer == "desktop" and not self._resizing:
+                    fg = u32.GetForegroundWindow()
+                    if fg and fg != self._hwnd:
+                        u32.GetClassNameW(fg, name, 64)
+                        if name.value in ("WorkerW", "Progman"):          # the desktop is showing
+                            if u32.IsIconic(self._hwnd) or not u32.IsWindowVisible(self._hwnd):
+                                u32.ShowWindow(self._hwnd, 4)               # SW_SHOWNOACTIVATE
+                                state = None
+                            if state != "desktop":
+                                u32.SetWindowPos(self._hwnd, HWND_TOP, 0, 0, 0, 0, KEEP)
+                                state = "desktop"
+                        elif state != "behind":                         # an app is in front: tuck behind
+                            u32.SetWindowPos(self._hwnd, HWND_BOTTOM, 0, 0, 0, 0, KEEP)
+                            state = "behind"
+                    else:
+                        state = None                                    # you're using the widget
+                else:
+                    state = None
+            except Exception:
+                log.warning("Layer loop: %s", traceback.format_exc())
+            time.sleep(0.25)
 
     def minimize(self):
         if self._window:
@@ -257,6 +308,8 @@ def on_shown(window, api):
     except Exception:
         log.warning("Could not read the window handle: %s", traceback.format_exc())
     round_corners(window, api._hwnd)
+    if api._hwnd:
+        threading.Thread(target=api._layer_loop, daemon=True).start()
 
 
 def round_corners(window, hwnd=None):
@@ -428,7 +481,7 @@ def run():
         frameless=True,
         easy_drag=False,
         min_size=(360, 440),
-        on_top=bool(settings.get("on_top")),
+        on_top=api._layer == "top",
         background_color="#0f0f0f" if dark else "#e8e8e6",
         text_select=True,
         **kwargs,

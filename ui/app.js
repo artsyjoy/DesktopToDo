@@ -1047,12 +1047,23 @@ function wireNoteDrag(page, body, changed) {
 function wireChrome() {
   $("#tabs").addEventListener("click", e => { const b = e.target.closest("button"); if (b && b.dataset.tab !== ui.tab) showTab(b.dataset.tab); });
   $("#theme").onclick = toggleTheme;
-  $("#pin").onclick = () => { S.on_top = !S.on_top; $("#pin").classList.toggle("on", !!S.on_top); call("set_on_top", !!S.on_top); save(); };
+  // where the widget lives: on top of apps, on the desktop behind them, or a normal window
+  const setLayer = layer => {
+    S.layer = layer; S.on_top = layer === "top";
+    $("#pin").classList.toggle("on", layer === "top");
+    $("#pin").title = layer === "top" ? "Staying on top (Ctrl+T to put it back on the desktop)" : "Keep on top (Ctrl+T)";
+    call("set_layer", layer); save();
+    toast(layer === "top" ? "Staying on top of other apps" : layer === "desktop" ? "Living on the desktop, behind your apps" : "Normal window");
+  };
+  $("#pin").onclick = () => setLayer(S.layer === "top" ? "desktop" : "top");
   $("#close").onclick = async () => { flushNote(); await save(true); call("close"); };
   $(".topbar").addEventListener("contextmenu", e => {
     e.preventDefault();
     showMenu(e.clientX, e.clientY, [
-      [(S.on_top ? "✓ " : "") + "Keep on top", () => $("#pin").click()],
+      [(S.layer === "desktop" ? "✓ " : "") + "Stay on desktop (behind apps)", () => setLayer("desktop")],
+      [(S.layer === "top" ? "✓ " : "") + "Stay on top of apps", () => setLayer("top")],
+      [(S.layer === "normal" ? "✓ " : "") + "Normal window", () => setLayer("normal")],
+      "-",
       [S.theme === "light" ? "Dark mode" : "Light mode", toggleTheme],
       "-", ["Export backup…", async () => { await save(true); const r = await call("export_backup"); if (r && r.ok) toast("Backup saved"); else if (r && r.error) toast(r.error); }],
       ["Import backup…", async () => {
@@ -1107,7 +1118,8 @@ async function start() {
   if (rollOver()) save();
   ui.noteId = S.open_note && D.notes.some(n => n.id === S.open_note) ? S.open_note : null;
   applyTheme();
-  $("#pin").classList.toggle("on", !!S.on_top);
+  S.layer = S.layer || (S.on_top ? "top" : "desktop");
+  $("#pin").classList.toggle("on", S.layer === "top");
   wireChrome();
   ui.tab = "glance";
   setSeg($("#tabs"), "glance"); placePill($("#tabs"), false);
