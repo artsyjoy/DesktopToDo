@@ -35,22 +35,22 @@ class Api:
     """Everything the interface (ui/app.js) can ask Python to do."""
 
     def __init__(self):
-        self.data = core.load_data()
-        core.roll_over(self.data)
-        core.upgrade_notes(self.data)
-        core.save_data(self.data)
-        self.window = None
-        self.css_width = None
+        self._data = core.load_data()
+        core.roll_over(self._data)
+        core.upgrade_notes(self._data)
+        core.save_data(self._data)
+        self._window = None
+        self._css_width = None
         self._lock = threading.Lock()
 
     # ---- data ------------------------------------------------------------------------
     def get_state(self):
-        return {"data": self.data, "smoke": SMOKE, "platform": sys.platform}
+        return {"data": self._data, "smoke": SMOKE, "platform": sys.platform}
 
     def save(self, data):
         with self._lock:
-            self.data = data
-            core.save_data(self.data)
+            self._data = data
+            core.save_data(self._data)
         return True
 
     # ---- online ----------------------------------------------------------------------
@@ -78,34 +78,34 @@ class Api:
 
     # ---- window ----------------------------------------------------------------------
     def report_size(self, css_width):
-        self.css_width = css_width
+        self._css_width = css_width
 
     def resize(self, css_w, css_h):
         """Resize from the corner grip. JS sends CSS pixels; convert to the window's units."""
-        w = self.window
+        w = self._window
         if not w:
             return
-        ratio = (w.width / self.css_width) if self.css_width else 1.0
+        ratio = (w.width / self._css_width) if self._css_width else 1.0
         w.resize(max(360, int(css_w * ratio)), max(440, int(css_h * ratio)))
 
     def set_on_top(self, on):
-        if self.window:
-            self.window.on_top = bool(on)
+        if self._window:
+            self._window.on_top = bool(on)
 
     def minimize(self):
-        if self.window:
-            self.window.minimize()
+        if self._window:
+            self._window.minimize()
 
     def close(self):
-        if self.window:
+        if self._window:
             self.remember_geometry()
-            self.window.destroy()
+            self._window.destroy()
 
     def remember_geometry(self):
-        w = self.window
+        w = self._window
         try:
-            self.data.setdefault("settings", {})["window"] = {"x": w.x, "y": w.y, "w": w.width, "h": w.height}
-            core.save_data(self.data)
+            self._data.setdefault("settings", {})["window"] = {"x": w.x, "y": w.y, "w": w.width, "h": w.height}
+            core.save_data(self._data)
         except Exception:
             pass
 
@@ -113,21 +113,21 @@ class Api:
     def export_backup(self):
         import webview
         name = f"DeskTodo backup {core.date.today().isoformat()}.json"
-        path = self.window.create_file_dialog(webview.SAVE_DIALOG, save_filename=name,
+        path = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=name,
                                               directory=os.path.join(os.path.expanduser("~"), "Documents"))
         if not path:
             return {"ok": False, "cancelled": True}
         path = path if isinstance(path, str) else path[0]
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, indent=1, ensure_ascii=False)
+                json.dump(self._data, f, indent=1, ensure_ascii=False)
             return {"ok": True, "path": path}
         except OSError as exc:
             return {"ok": False, "error": str(exc)}
 
     def import_backup(self):
         import webview
-        paths = self.window.create_file_dialog(webview.OPEN_DIALOG, file_types=("DeskTodo backup (*.json)",),
+        paths = self._window.create_file_dialog(webview.OPEN_DIALOG, file_types=("DeskTodo backup (*.json)",),
                                                directory=os.path.join(os.path.expanduser("~"), "Documents"))
         if not paths:
             return {"ok": False, "cancelled": True}
@@ -151,7 +151,7 @@ class Api:
         out = os.path.join(tempfile.gettempdir(), "desktodo_smoke.json")
         with open(out, "w", encoding="utf-8") as f:
             json.dump(info, f)
-        threading.Timer(1.0, lambda: self.window and self.window.destroy()).start()
+        threading.Timer(1.0, lambda: self._window and self._window.destroy()).start()
 
 
 def round_corners(window):
@@ -220,7 +220,7 @@ def run():
     import webview
 
     api = Api()
-    settings = api.data.setdefault("settings", {})
+    settings = api._data.setdefault("settings", {})
     geo = settings.get("window") or {}
     dark = settings.get("theme", "dark") == "dark"
     kwargs = {}
@@ -243,7 +243,7 @@ def run():
         text_select=True,
         **kwargs,
     )
-    api.window = window
+    api._window = window
     window.events.shown += lambda: round_corners(window)
     window.events.closing += api.remember_geometry
     window.events.loaded += lambda: log.info("Page loaded with renderer: %s", getattr(webview, "renderer", "?"))
