@@ -134,26 +134,28 @@ def roll_over(data):
 # =========================================================================== look
 
 THEMES = {
-    # Calm, warm neutrals with one amber accent (inspired by Rivian's app).
+    # Rivian-inspired: light grey / dark grey surfaces with a single orange accent.
     "light": {
-        "bg": "#efeee9", "card": "#ffffff", "text": "#161616", "muted": "#7b7a75", "faint": "#b2b1ab",
-        "line": "#dcdbd5", "chip": "#e3e2dc", "field": "#efeee9", "sel": "#f6dc8c",
-        "accent": "#f5b400", "accent_text": "#a77a00", "on_accent": "#161616", "on_accent_muted": "#5c4500",
-        "check": "#161616",
+        "bg": "#e8e8e6", "card": "#f6f6f4", "text": "#1b1b1b", "muted": "#7a7a77", "faint": "#b3b3b0",
+        "line": "#d8d8d5", "chip": "#dcdcd9", "field": "#e8e8e6", "sel": "#f8c8ab",
+        "accent": "#f26b1d", "accent_text": "#d9581a", "on_accent": "#ffffff", "on_accent_muted": "#ffdcc8",
+        "check": "#ffffff", "seg_on": "#1b1b1b", "seg_on_fg": "#f6f6f4",
+        "tile_dark": "#2b2b2b", "on_dark": "#f2f2f0", "on_dark_muted": "#9d9d99",
     },
     "dark": {
-        "bg": "#111111", "card": "#1d1d1d", "text": "#f2f2f0", "muted": "#8e8e8a", "faint": "#565654",
-        "line": "#2b2b2b", "chip": "#282828", "field": "#111111", "sel": "#5a4500",
-        "accent": "#f5b400", "accent_text": "#f5b400", "on_accent": "#111111", "on_accent_muted": "#3d2e00",
-        "check": "#111111",
+        "bg": "#0f0f0f", "card": "#1c1c1c", "text": "#f1f1ef", "muted": "#8f8f8b", "faint": "#555553",
+        "line": "#2a2a2a", "chip": "#2a2a2a", "field": "#0f0f0f", "sel": "#6b3416",
+        "accent": "#f26b1d", "accent_text": "#f47b37", "on_accent": "#ffffff", "on_accent_muted": "#ffdcc8",
+        "check": "#ffffff", "seg_on": "#e9e9e6", "seg_on_fg": "#141414",
+        "tile_dark": "#2e2e2e", "on_dark": "#f2f2f0", "on_dark_muted": "#9d9d99",
     },
 }
 
 # Design tokens shared by every screen, so the whole widget feels like one system.
 PAD = 22        # outer padding left/right
 GAP = 10        # space between cards
-RADIUS = 16     # card corner radius
-CARD_PAD = 16   # padding inside cards
+RADIUS = 20     # card corner radius
+CARD_PAD = 18   # padding inside cards
 TOP = 18        # space above the tab bar
 BELOW_TABS = 26 # breathing room between the tab bar and every screen's content
 
@@ -202,6 +204,8 @@ def setup_fonts(root):
         "icon": F(root, family=body, size=14),
         "clock": F(root, family=light, size=56),
         "temp": F(root, family=light, size=32),
+        "hero": F(root, family=light, size=46),
+        "stat": F(root, family=light, size=20),
         "month": F(root, family=heavy, size=40, weight=heavy_w),
         "year": F(root, family=semi, size=15, weight=semi_w),
         "cal": F(root, family=semi, size=13, weight=semi_w),
@@ -315,7 +319,7 @@ class Card(tk.Canvas):
         self.inner.bind("<Configure>", self._fit)
 
     def _fit(self, _e=None):
-        h = self.inner.winfo_reqheight() + 2 * self.pad
+        h = max(getattr(self, "min_h", 0), self.inner.winfo_reqheight() + 2 * self.pad)
         if int(float(self.cget("height"))) != h:
             self.config(height=h)
 
@@ -328,15 +332,82 @@ class Card(tk.Canvas):
 
 
 def pill(parent, text, command, colors, fonts, primary=True, bg=None):
-    """Small rounded-looking button used everywhere (same look as + NEW)."""
+    """Rounded button used everywhere: orange when primary, outlined otherwise."""
+    C, font = colors, fonts["small_b"]
+    outer = bg or parent.cget("bg")
+    w, h = font.measure(text) + 30, 30
+    cv = tk.Canvas(parent, width=w, height=h, bg=outer, highlightthickness=0, bd=0, cursor="hand2")
+    if primary:
+        round_rect(cv, 0, 0, w - 1, h - 1, h // 2, fill=C["accent"], outline="")
+    else:
+        round_rect(cv, 1, 1, w - 2, h - 2, h // 2 - 1, fill=outer, outline=C["line"], width=1.2)
+    cv.create_text(w / 2, h / 2, text=text, font=font, fill=C["on_accent"] if primary else C["text"])
+    cv.bind("<Button-1>", lambda e: command())
+    return cv
+
+
+class Segmented(tk.Canvas):
+    """Rounded pill switch (tabs, 12h/24h, city picker): one shared control style."""
+
+    def __init__(self, master, items, active, on_change, colors, font, outer, height=30, pad_x=12):
+        C = colors
+        widths = [font.measure(label) + 2 * pad_x for _, label in items]
+        width = sum(widths) + 6
+        super().__init__(master, width=width, height=height, bg=outer, highlightthickness=0, bd=0, cursor="hand2")
+        round_rect(self, 0, 0, width - 1, height - 1, height // 2, fill=C["chip"], outline="")
+        x, self.spans = 3, []
+        for (key, label), w in zip(items, widths):
+            on = key == active
+            if on:
+                round_rect(self, x, 3, x + w, height - 4, (height - 7) // 2, fill=C["seg_on"], outline="")
+            self.create_text(x + w / 2, height / 2, text=label, font=font, fill=C["seg_on_fg"] if on else C["muted"])
+            self.spans.append((x, x + w, key))
+            x += w
+
+        def click(e):
+            for a, b, key in self.spans:
+                if a <= e.x < b and key != active:
+                    on_change(key)
+                    break
+        self.bind("<Button-1>", click)
+
+
+def circle_button(parent, colors, outer, draw, command, active=False, size=30):
+    """Round icon button, like the lock / unlock buttons in Rivian's app."""
     C = colors
-    lbl = tk.Label(parent, text=text, font=fonts["small_b"], padx=12, pady=5, cursor="hand2",
-                   bg=C["accent"] if primary else (bg or C["bg"]),
-                   fg=C["on_accent"] if primary else C["text"],
-                   highlightthickness=0 if primary else 1, highlightbackground=C["line"],
-                   highlightcolor=C["line"])
-    lbl.bind("<Button-1>", lambda e: command())
-    return lbl
+    cv = tk.Canvas(parent, width=size, height=size, bg=outer, highlightthickness=0, bd=0, cursor="hand2")
+    cv.create_oval(0, 0, size - 1, size - 1, fill=C["accent"] if active else C["chip"], outline="")
+    draw(cv, size, C["on_accent"] if active else C["text"], C["accent"] if active else C["chip"])
+    cv.bind("<Button-1>", lambda e: command())
+    return cv
+
+
+def draw_close(cv, s, fg, bg):
+    m = s / 2
+    for a, b in ((-4, 4), (4, -4)):
+        cv.create_line(m - 4, m + a, m + 4, m + b, fill=fg, width=1.6, capstyle="round")
+
+
+def draw_sun(cv, s, fg, bg):
+    m = s / 2
+    cv.create_oval(m - 3.5, m - 3.5, m + 3.5, m + 3.5, outline=fg, width=1.6)
+    import math
+    for k in range(8):
+        a = k * math.pi / 4
+        cv.create_line(m + 6 * math.cos(a), m + 6 * math.sin(a), m + 8 * math.cos(a), m + 8 * math.sin(a),
+                       fill=fg, width=1.6, capstyle="round")
+
+
+def draw_moon(cv, s, fg, bg):
+    m = s / 2
+    cv.create_oval(m - 6, m - 6, m + 6, m + 6, fill=fg, outline="")
+    cv.create_oval(m - 3, m - 9, m + 9, m + 3, fill=bg, outline="")
+
+
+def draw_pin(cv, s, fg, bg):
+    m = s / 2
+    cv.create_oval(m - 4, m - 7, m + 4, m + 1, fill=fg, outline="")
+    cv.create_line(m, m + 1, m, m + 8, fill=fg, width=1.6, capstyle="round")
 
 
 # =========================================================================== app
@@ -378,7 +449,7 @@ class App:
         self.root.after(150, self._poll)
 
     VIEWS = ("glance", "todo", "notes")
-    TAB_LABELS = {"todo": "TO-DO", "notes": "NOTES", "glance": "AT A GLANCE"}
+    TAB_LABELS = {"glance": "At a glance", "todo": "To-do", "notes": "Notes"}
 
     @staticmethod
     def set_icon(win):
@@ -430,7 +501,7 @@ class App:
         body = tk.Frame(d, bg=C["bg"], width=width)
         body.pack(fill="both", expand=True, padx=PAD, pady=(18, 20))
         tk.Frame(body, width=width - 2 * PAD, height=0, bg=C["bg"]).pack()  # fixes the dialog's width
-        tk.Label(body, text=title.upper(), font=F["tab"], fg=C["text"], bg=C["bg"]).pack(anchor="w", pady=(0, 10))
+        tk.Label(body, text=title, font=F["note_title"], fg=C["text"], bg=C["bg"]).pack(anchor="w", pady=(0, 10))
         d.bind("<Escape>", lambda e: d.destroy())
         d.after(50, d.focus_force)
         return d, body
@@ -541,43 +612,15 @@ class App:
             top.bind("<B1-Motion>", self._drag_move)
         top.bind("<Button-3>", self.window_menu)
 
+        Segmented(top, [(k, self.TAB_LABELS[k]) for k in self.VIEWS], self.tab, self.switch,
+                  C, self.F["small_b"], C["bg"], height=32, pad_x=13).pack(side="left")
+
         if self.widget:
-            close = tk.Label(top, text="×", font=self.F["icon"], fg=C["faint"], bg=C["bg"],
-                             cursor="hand2", padx=2)
-            close.pack(side="right", padx=(10, 0))
-            close.bind("<Button-1>", lambda e: self.on_close())
-            close.bind("<Enter>", lambda e: close.config(fg=C["accent_text"]))
-            close.bind("<Leave>", lambda e: close.config(fg=C["faint"]))
-        for key in self.VIEWS:
-            label = self.TAB_LABELS[key]
-            on = key == self.tab
-            box = tk.Frame(top, bg=C["bg"])
-            box.pack(side="left", padx=(0, 16))
-            lbl = tk.Label(box, text=label, font=self.F["tab"], bg=C["bg"], cursor="hand2",
-                           fg=C["text"] if on else C["faint"])
-            lbl.pack()
-            tk.Frame(box, height=2, bg=C["accent"] if on else C["bg"]).pack(fill="x", pady=(2, 0))
-            lbl.bind("<Button-1>", lambda e, k=key: self.switch(k))
-
-        # theme toggle (drawn, so it looks the same everywhere)
+            circle_button(top, C, C["bg"], draw_close, self.on_close).pack(side="right", padx=(6, 0))
         dark = self.settings.get("theme", "dark") == "dark"
-        icon = tk.Canvas(top, width=22, height=22, bg=C["bg"], highlightthickness=0, cursor="hand2")
-        icon.pack(side="right")
-        if dark:  # sun -> switch to light
-            icon.create_oval(7, 7, 15, 15, outline=C["text"], width=2)
-            for x1, y1, x2, y2 in ((11, 1, 11, 4), (11, 18, 11, 21), (1, 11, 4, 11), (18, 11, 21, 11),
-                                   (4, 4, 6, 6), (16, 16, 18, 18), (4, 18, 6, 16), (16, 6, 18, 4)):
-                icon.create_line(x1, y1, x2, y2, fill=C["text"], width=2)
-        else:  # moon -> switch to dark
-            icon.create_oval(3, 3, 19, 19, fill=C["text"], outline="")
-            icon.create_oval(8, 0, 22, 14, fill=C["bg"], outline="")
-        icon.bind("<Button-1>", lambda e: self.toggle_theme())
-
+        circle_button(top, C, C["bg"], draw_sun if dark else draw_moon, self.toggle_theme).pack(side="right", padx=(6, 0))
         on_top = bool(self.settings.get("on_top"))
-        pin = tk.Label(top, text="PIN", font=self.F["small_b"], cursor="hand2", padx=6,
-                       bg=C["accent"] if on_top else C["bg"], fg=C["on_accent"] if on_top else C["faint"])
-        pin.pack(side="right", padx=(0, 12))
-        pin.bind("<Button-1>", lambda e: self.toggle_on_top())
+        circle_button(top, C, C["bg"], draw_pin, self.toggle_on_top, active=on_top).pack(side="right")
 
         if self.widget:  # thin bottom strip with a resize handle in the corner
             strip_bg = C["bg"]
@@ -1040,15 +1083,29 @@ def city_key(c):
 
 def fetch_weather(lat, lon):
     q = urllib.parse.urlencode({
-        "latitude": lat, "longitude": lon, "timezone": "auto", "forecast_days": 1,
-        "current": "temperature_2m,apparent_temperature,weather_code,is_day",
-        "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset",
+        "latitude": lat, "longitude": lon, "timezone": "auto", "forecast_days": 2, "wind_speed_unit": "mph",
+        "current": "temperature_2m,apparent_temperature,weather_code,is_day,relative_humidity_2m,"
+                   "wind_speed_10m,wind_gusts_10m,wind_direction_10m",
+        "hourly": "temperature_2m,weather_code,is_day",
+        "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max",
     })
     j = json.loads(http_get("https://api.open-meteo.com/v1/forecast?" + q))
-    cur, d = j["current"], j["daily"]
-    return {"temp": cur["temperature_2m"], "feels": cur["apparent_temperature"], "code": cur["weather_code"],
+    cur, d, hr = j["current"], j["daily"], j.get("hourly", {})
+    now_hour = cur.get("time", "")[:13]
+    hourly = []
+    for i, t in enumerate(hr.get("time", [])):
+        if t[:13] > now_hour and len(hourly) < 6:
+            hourly.append({"t": t, "temp": hr["temperature_2m"][i], "code": hr["weather_code"][i],
+                           "is_day": (hr.get("is_day") or [1] * (i + 1))[i]})
+
+    def first(key):
+        return (d.get(key) or [None])[0]
+    return {"temp": cur["temperature_2m"], "feels": cur.get("apparent_temperature"), "code": cur["weather_code"],
             "is_day": cur.get("is_day", 1), "hi": d["temperature_2m_max"][0], "lo": d["temperature_2m_min"][0],
             "sunrise": d["sunrise"][0], "sunset": d["sunset"][0],
+            "humidity": cur.get("relative_humidity_2m"), "wind": cur.get("wind_speed_10m"),
+            "gust": cur.get("wind_gusts_10m"), "wind_dir": cur.get("wind_direction_10m"),
+            "uv": first("uv_index_max"), "pop": first("precipitation_probability_max"), "hourly": hourly,
             "fetched": datetime.now().isoformat(timespec="seconds")}
 
 
@@ -1447,93 +1504,230 @@ class GlanceView:
     def build(self):
         for w in self.scroll.inner.winfo_children():
             w.destroy()
-        self.wraps = []
+        self.wraps, self.pairs = [], []
         C, F = self.C, self.F
         wrap = tk.Frame(self.scroll.inner, bg=C["bg"])
         wrap.pack(fill="x", padx=PAD, pady=(0, 24))
 
-        # clock
+        # centred clock, like the range readout in Rivian's app
         self.date_lbl = tk.Label(wrap, font=F["small_b"], fg=C["muted"], bg=C["bg"])
-        self.date_lbl.pack(anchor="w")
+        self.date_lbl.pack()
         row = tk.Frame(wrap, bg=C["bg"])
-        row.pack(fill="x")
-        row.pack_configure(pady=(10, 12))
-        # drawn on a canvas so the digits get even spacing and don't jump around every second
+        row.pack(pady=(10, 8))
         self.clock_cv = tk.Canvas(row, height=10, width=10, bg=C["bg"], highlightthickness=0, bd=0)
         self.clock_cv.pack(side="left")
         self.ampm_lbl = tk.Label(row, font=F["tab"], fg=C["muted"], bg=C["bg"])
-        self.ampm_lbl.pack(side="left", anchor="s", pady=(0, 10), padx=(8, 0))
+        self.ampm_lbl.pack(side="left", anchor="s", pady=(0, 10), padx=(6, 0))
+        self.sun_lbl = tk.Label(wrap, font=F["small"], fg=C["muted"], bg=C["bg"])
+        self.sun_lbl.pack()
+        Segmented(wrap, [("12", "12h"), ("24", "24h")], "24" if self.h24 else "12",
+                  lambda k: self.set_24(k == "24"), C, F["small_b"], C["bg"], height=26, pad_x=10).pack(pady=(12, 24))
 
-        info = tk.Frame(wrap, bg=C["bg"])
-        info.pack(fill="x", pady=(0, 20))
-        self.sun_lbl = tk.Label(info, font=F["small"], fg=C["muted"], bg=C["bg"])
-        self.sun_lbl.pack(side="left")
-        tog = tk.Frame(info, bg=C["chip"])
-        tog.pack(side="right")
-        for label, val in (("12h", False), ("24h", True)):
-            on = self.h24 == val
-            b = tk.Label(tog, text=label, font=F["small_b"], padx=9, pady=2, cursor="hand2",
-                         bg=C["text"] if on else C["chip"], fg=C["bg"] if on else C["muted"])
-            b.pack(side="left")
-            b.bind("<Button-1>", lambda e, v=val: self.set_24(v))
+        # hero tiles (like Climate / Energy)
+        tiles = tk.Frame(wrap, bg=C["bg"])
+        tiles.pack(fill="x")
+        tiles.columnconfigure(0, weight=1, uniform="t")
+        tiles.columnconfigure(1, weight=1, uniform="t")
+        a, b = self.next_tile(tiles), self.tasks_tile(tiles)
+        a.grid(row=0, column=0, sticky="nsew", padx=(0, GAP // 2))
+        b.grid(row=0, column=1, sticky="nsew", padx=(GAP // 2, 0))
+        self.pairs.append((a, b))
 
-        # weather cards
-        grid = tk.Frame(wrap, bg=C["bg"])
-        grid.pack(fill="x")
-        grid.columnconfigure(0, weight=1, uniform="w")
-        grid.columnconfigure(1, weight=1, uniform="w")
-        for i, city in enumerate(self.settings["cities"][:2]):
-            card = self.weather_card(grid, i, city)
-            card.grid(row=0, column=i, sticky="ew", padx=(0, GAP // 2) if i == 0 else (GAP // 2, 0))
-
+        self.weather_card(wrap).pack(fill="x", pady=(GAP, 0))
+        stats = self.weather_stats(wrap)
+        if stats is not None:
+            stats.pack(fill="x", pady=(GAP, 0))
         self.calendar_card(wrap).pack(fill="x", pady=(GAP, 0))
         self.events_card(wrap).pack(fill="x", pady=(GAP, 0))
 
         self.update_clock()
         self.on_width(self.width)
 
-    def weather_card(self, parent, i, city):
+    def equalize(self):
+        """Give side-by-side tiles the same height."""
+        for pair in self.pairs:
+            try:
+                for c in pair:
+                    c.min_h = 0
+                    c._fit()
+                h = max(c.inner.winfo_reqheight() + 2 * c.pad for c in pair)
+                for c in pair:
+                    c.min_h = h
+                    c._fit()
+            except tk.TclError:
+                pass
+
+    # ---- hero tiles ------------------------------------------------------------------
+
+    def next_event(self):
+        if not self.settings.get("ics_url"):
+            return "Connect Outlook", "See your meetings here"
+        if "events" not in self.cache:
+            return "Loading...", "Fetching your calendar"
+        now = datetime.now()
+        upcoming = [e for e in self.cache["events"] if datetime.fromisoformat(e["end"]) > now]
+        timed = [e for e in upcoming if not e["all_day"]]
+        if not upcoming:
+            return "All clear", "No meetings coming up"
+        e = (timed or upcoming)[0]
+        s, en = datetime.fromisoformat(e["start"]), datetime.fromisoformat(e["end"])
+        if e["all_day"]:
+            when = "All day"
+        elif s <= now:
+            when = f"Now · until {fmt_time(en, self.h24)}"
+        elif s.date() == now.date():
+            mins = int((s - now).total_seconds() // 60)
+            when = f"{fmt_time(s, self.h24)} · in {mins} min" if mins < 60 else f"Today · {fmt_time(s, self.h24)}"
+        elif s.date() == now.date() + timedelta(days=1):
+            when = f"Tomorrow · {fmt_time(s, self.h24)}"
+        else:
+            when = f"{s:%A} · {fmt_time(s, self.h24)}"
+        return e["title"], when
+
+    def next_tile(self, parent):
         C, F = self.C, self.F
-        accent = False  # all weather cards share the neutral card style
-        fill = C["accent"] if accent else C["card"]
-        fg = C["on_accent"] if accent else C["text"]
-        mut = C["on_accent_muted"] if accent else C["muted"]
+        fill = C["accent"]
+        card = Card(parent, C["bg"], fill, cursor="hand2")
+        tk.Label(card.inner, text="Up next", font=F["small"], fg=C["on_accent_muted"], bg=fill).pack(anchor="w")
+        title, when = self.next_event()
+        t = tk.Label(card.inner, text=title, font=F["note_title"], fg=C["on_accent"], bg=fill, anchor="w", justify="left")
+        t.pack(fill="x", pady=(14, 2))
+        w = tk.Label(card.inner, text=when, font=F["small"], fg=C["on_accent_muted"], bg=fill, anchor="w", justify="left")
+        w.pack(fill="x")
+        self.wraps += [(t, "half"), (w, "half")]
+        if not self.settings.get("ics_url"):
+            for wdg in (card, card.inner, t, w):
+                wdg.bind("<Button-1>", lambda e: self.connect_calendar())
+        return card
+
+    def tasks_tile(self, parent):
+        C, F = self.C, self.F
+        fill = C["tile_dark"]
+        tasks = self.app.data["days"].get(today_iso(), [])
+        left = sum(1 for t in tasks if not t["done"])
+        card = Card(parent, C["bg"], fill, cursor="hand2")
+        tk.Label(card.inner, text="Tasks today", font=F["small"], fg=C["on_dark_muted"], bg=fill).pack(anchor="w")
+        row = tk.Frame(card.inner, bg=fill)
+        row.pack(fill="x", pady=(6, 0))
+        num = tk.Label(row, text=str(left), font=F["temp"], fg=C["on_dark"], bg=fill)
+        num.pack(side="left")
+        sub = tk.Label(card.inner, text=(f"left of {len(tasks)}" if tasks else "Nothing planned"),
+                       font=F["small"], fg=C["on_dark_muted"], bg=fill, anchor="w")
+        sub.pack(fill="x")
+        for wdg in (card, card.inner, row, num, sub):
+            wdg.bind("<Button-1>", lambda e: self.app.switch("todo"))
+        return card
+
+    # ---- weather ---------------------------------------------------------------------
+
+    def unit_speed(self, mph):
+        if mph is None:
+            return "–"
+        return f"{round(mph)} mph" if self.settings.get("units", "F") == "F" else f"{round(mph * 1.609)} km/h"
+
+    def selected_city(self):
+        cities = self.settings["cities"][:2]
+        i = min(int(self.settings.get("wx_city", 0)), len(cities) - 1)
+        return i, cities[i]
+
+    def pick_city(self, i):
+        self.settings["wx_city"] = i
+        self.app.persist()
+        self.build()
+
+    def weather_card(self, parent):
+        C, F = self.C, self.F
+        fill = C["card"]
         card = Card(parent, C["bg"], fill)
         top = tk.Frame(card.inner, bg=fill)
         top.pack(fill="x")
-        name = tk.Label(top, text=city["name"], font=F["small_b"], fg=fg, bg=fill, anchor="w", justify="left")
-        name.pack(side="left", fill="x", expand=True)
-        self.wraps.append((name, "half"))
-        more = tk.Label(top, text="···", font=F["tab"], fg=mut, bg=fill, cursor="hand2")
-        more.pack(side="right", anchor="n")
-        more.bind("<Button-1>", lambda e: self.city_menu(e, i))
-        tk.Label(card.inner, text=city.get("region", ""), font=F["small"], fg=mut, bg=fill).pack(anchor="w")
+        sel, city = self.selected_city()
 
+        def short(n):
+            return n if len(n) <= 16 else n[:15] + "…"
+        Segmented(top, [(str(i), short(c["name"])) for i, c in enumerate(self.settings["cities"][:2])], str(sel),
+                  lambda k: self.pick_city(int(k)), C, F["small_b"], fill, height=28, pad_x=11).pack(side="left")
+        more = tk.Label(top, text="···", font=F["tab"], fg=C["muted"], bg=fill, cursor="hand2")
+        more.pack(side="right")
+        more.bind("<Button-1>", lambda e: self.city_menu(e, sel))
+
+        tk.Label(card.inner, text=", ".join(x for x in (city["name"], city.get("region")) if x),
+                 font=F["small"], fg=C["muted"], bg=fill).pack(anchor="w", pady=(16, 0))
         w = self.cache["weather"].get(city_key(city))
+        if not w:
+            tk.Label(card.inner, text="Weather unavailable" if self.cache.get("weather_error") else "Loading weather...",
+                     font=F["body"], fg=C["muted"], bg=fill).pack(anchor="w", pady=(8, 0))
+            return card
         mid = tk.Frame(card.inner, bg=fill)
-        mid.pack(fill="x", pady=(8, 2))
-        tk.Label(mid, text=self.to_unit(w["temp"]) if w else "–", font=F["temp"], fg=fg, bg=fill).pack(side="left")
-        if w:
-            icon = tk.Canvas(mid, width=34, height=36, bg=fill, highlightthickness=0)
-            icon.pack(side="right", anchor="s")
-            desc, kind = WEATHER_CODES.get(int(w["code"]), ("", "cloud"))
-            draw_weather_icon(icon, kind, w.get("is_day", 1), C["muted"], C["accent"])
-            tk.Label(card.inner, text=desc, font=F["small_b"], fg=fg, bg=fill).pack(anchor="w")
-            tk.Label(card.inner, text=f"H {self.to_unit(w['hi'])}   L {self.to_unit(w['lo'])}",
-                     font=F["small"], fg=mut, bg=fill).pack(anchor="w")
-        else:
-            tk.Label(card.inner, text="Loading weather..." if not self.cache.get("weather_error")
-                     else "Weather unavailable", font=F["small"], fg=mut, bg=fill).pack(anchor="w")
-        for wdg in (card, card.inner):
-            wdg.bind("<Button-3>", lambda e: self.city_menu(e, i))
+        mid.pack(fill="x")
+        tk.Label(mid, text=self.to_unit(w["temp"]), font=F["hero"], fg=C["text"], bg=fill).pack(side="left")
+        tk.Label(mid, text=self.settings.get("units", "F"), font=F["title"], fg=C["muted"], bg=fill).pack(
+            side="left", anchor="n", pady=(12, 0))
+        icon = tk.Canvas(mid, width=38, height=38, bg=fill, highlightthickness=0)
+        icon.pack(side="right")
+        desc, kind = WEATHER_CODES.get(int(w["code"]), ("", "cloud"))
+        draw_weather_icon(icon, kind, w.get("is_day", 1), C["muted"], C["accent"])
+        tk.Label(card.inner, text=desc, font=F["body"], fg=C["text"], bg=fill).pack(anchor="w")
+        tk.Label(card.inner, text=f"Feels like {self.to_unit(w.get('feels'))}   ·   "
+                                  f"H {self.to_unit(w['hi'])}  L {self.to_unit(w['lo'])}",
+                 font=F["small"], fg=C["muted"], bg=fill).pack(anchor="w", pady=(2, 0))
+
+        hours = w.get("hourly") or []
+        if hours:
+            tk.Frame(card.inner, height=1, bg=C["line"]).pack(fill="x", pady=(14, 10))
+            strip = tk.Frame(card.inner, bg=fill)
+            strip.pack(fill="x")
+            for c, h in enumerate(hours[:6]):
+                strip.columnconfigure(c, weight=1, uniform="h")
+                t = datetime.fromisoformat(h["t"])
+                label = t.strftime("%H:00") if self.h24 else t.strftime("%I%p").lstrip("0").lower()
+                tk.Label(strip, text=label, font=F["small"], fg=C["muted"], bg=fill).grid(row=0, column=c)
+                cv = tk.Canvas(strip, width=34, height=36, bg=fill, highlightthickness=0)
+                cv.grid(row=1, column=c, pady=2)
+                draw_weather_icon(cv, WEATHER_CODES.get(int(h["code"]), ("", "cloud"))[1], h.get("is_day", 1),
+                                  C["muted"], C["accent"])
+                tk.Label(strip, text=self.to_unit(h["temp"]), font=F["small_b"], fg=C["text"], bg=fill).grid(row=2, column=c)
         return card
+
+    def weather_stats(self, parent):
+        C, F = self.C, self.F
+        _, city = self.selected_city()
+        w = self.cache["weather"].get(city_key(city))
+        if not w or w.get("humidity") is None:
+            return None  # older cached data or a missing reading: skip the detail tiles
+        uv = w.get("uv")
+        uv_word = "–" if uv is None else ("Low" if uv < 3 else "Moderate" if uv < 6 else "High" if uv < 8
+                                               else "Very high" if uv < 11 else "Extreme")
+        dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        wdir = dirs[round((w.get("wind_dir") or 0) / 45) % 8]
+        stats = [("Humidity", f"{round(w['humidity'])}%", ""),
+                 ("Wind", self.unit_speed(w.get("wind")), f"Gusts {self.unit_speed(w.get('gust'))} · {wdir}"),
+                 ("Precipitation", f"{round(w.get('pop') or 0)}%", "Chance today"),
+                 ("UV index", uv_word, "" if uv is None else f"Max {uv:.0f}")]
+        grid = tk.Frame(parent, bg=C["bg"])
+        grid.columnconfigure(0, weight=1, uniform="s")
+        grid.columnconfigure(1, weight=1, uniform="s")
+        cards = []
+        for i, (name, value, sub) in enumerate(stats):
+            card = Card(grid, C["bg"], C["card"])
+            tk.Label(card.inner, text=name, font=F["small"], fg=C["muted"], bg=C["card"]).pack(anchor="w")
+            tk.Label(card.inner, text=value, font=F["stat"], fg=C["text"], bg=C["card"]).pack(anchor="w", pady=(6, 0))
+            s = tk.Label(card.inner, text=sub, font=F["small"], fg=C["muted"], bg=C["card"], anchor="w", justify="left")
+            s.pack(fill="x")
+            self.wraps.append((s, "half"))
+            r, c = divmod(i, 2)
+            card.grid(row=r, column=c, sticky="nsew", padx=(0, GAP // 2) if c == 0 else (GAP // 2, 0),
+                      pady=(0, GAP) if r == 0 else 0)
+            cards.append(card)
+        self.pairs += [(cards[0], cards[1]), (cards[2], cards[3])]
+        return grid
 
     def events_card(self, parent):
         C, F = self.C, self.F
         card = Card(parent, C["bg"], C["card"])
         head = tk.Frame(card.inner, bg=C["card"])
         head.pack(fill="x")
-        tk.Label(head, text="UP NEXT", font=F["tab"], fg=C["text"], bg=C["card"]).pack(side="left")
+        tk.Label(head, text="This week", font=F["note_title"], fg=C["text"], bg=C["card"]).pack(side="left")
         url = self.settings.get("ics_url")
         if url:
             more = tk.Label(head, text="···", font=F["tab"], fg=C["muted"], bg=C["card"], cursor="hand2")
@@ -1547,16 +1741,15 @@ class GlanceView:
         tasks_left = sum(1 for t in self.app.data["days"].get(today_iso(), []) if not t["done"])
         brief = (f"Today: {today_left} event{'s' if today_left != 1 else ''} · " if url else "Today: ") + \
             f"{tasks_left} task{'s' if tasks_left != 1 else ''} left"
-        tk.Label(card.inner, text=brief, font=F["small"], fg=C["muted"], bg=C["card"]).pack(anchor="w", pady=(2, 8))
+        tk.Label(card.inner, text=brief, font=F["small"], fg=C["muted"], bg=C["card"]).pack(anchor="w", pady=(2, 10))
 
         if not url:
             msg = tk.Label(card.inner, text="See your upcoming Outlook meetings here.", font=F["body"],
                            fg=C["text"], bg=C["card"], justify="left", anchor="w")
             msg.pack(fill="x")
             self.wraps.append((msg, "full"))
-            pill(card.inner, "+ CONNECT OUTLOOK", self.connect_calendar, C, F).pack(anchor="w", pady=(10, 0))
+            pill(card.inner, "Connect Outlook", self.connect_calendar, C, F).pack(anchor="w", pady=(12, 0))
             return card
-
         if self.cache.get("events_error"):
             err = tk.Label(card.inner, text="Couldn't refresh the calendar — showing the last saved events.",
                            font=F["small"], fg=C["accent_text"], bg=C["card"], justify="left", anchor="w")
@@ -1566,22 +1759,21 @@ class GlanceView:
             tk.Label(card.inner, text="Nothing scheduled for the next week." if "events" in self.cache
                      else "Loading calendar...", font=F["body"], fg=C["muted"], bg=C["card"]).pack(anchor="w")
             return card
-
         shown_day, first_group = None, False
         for e in events[:5]:
             s, en = datetime.fromisoformat(e["start"]), datetime.fromisoformat(e["end"])
             d = s.date() if s > now else now.date()
             if d != shown_day:
                 shown_day = d
-                label = "TODAY" if d == now.date() else "TOMORROW" if d == now.date() + timedelta(days=1) \
-                    else f"{d:%a} {d:%b} {d.day}".upper()
+                label = "Today" if d == now.date() else "Tomorrow" if d == now.date() + timedelta(days=1) \
+                    else f"{d:%A}, {d:%b} {d.day}"
                 tk.Label(card.inner, text=label, font=F["small_b"], fg=C["muted"], bg=C["card"]).pack(
-                    anchor="w", pady=(6 if first_group else 0, 2))
+                    anchor="w", pady=(8 if first_group else 0, 2))
                 first_group = True
             row = tk.Frame(card.inner, bg=C["card"])
             row.pack(fill="x", pady=2)
             live = s <= now < en
-            when = "All day" if e["all_day"] else ("NOW" if live else fmt_time(s, self.h24))
+            when = "All day" if e["all_day"] else ("Now" if live else fmt_time(s, self.h24))
             tk.Label(row, text=when, font=F["small_b"], width=7, anchor="w", bg=C["card"],
                      fg=C["accent_text"] if live else C["text"]).pack(side="left", anchor="n", pady=(2, 0))
             col = tk.Frame(row, bg=C["card"])
@@ -1596,46 +1788,10 @@ class GlanceView:
                 self.wraps.append((loc, "event"))
         return card
 
-    def tasks_card(self, parent):
-        C, F = self.C, self.F
-        card = Card(parent, C["bg"], C["card"])
-        head = tk.Frame(card.inner, bg=C["card"], cursor="hand2")
-        head.pack(fill="x")
-        h = tk.Label(head, text="TODAY'S TASKS", font=F["tab"], fg=C["text"], bg=C["card"], cursor="hand2")
-        h.pack(side="left")
-        go = tk.Label(head, text="OPEN ›", font=F["small_b"], fg=C["muted"], bg=C["card"], cursor="hand2")
-        go.pack(side="right")
-        for w in (head, h, go):
-            w.bind("<Button-1>", lambda e: self.app.switch("todo"))
-        tasks = [t for t in self.app.data["days"].get(today_iso(), []) if not t["done"]]
-        if not tasks:
-            tk.Label(card.inner, text="Nothing left for today.", font=F["body"], fg=C["muted"],
-                     bg=C["card"]).pack(anchor="w", pady=(8, 0))
-            return card
-        box = tk.Frame(card.inner, bg=C["card"])
-        box.pack(fill="x", pady=(8, 0))
-        for t in tasks[:6]:
-            row = tk.Frame(box, bg=C["card"])
-            row.pack(fill="x", pady=2)
-            chk = tk.Canvas(row, width=17, height=17, bg=C["card"], highlightthickness=0, cursor="hand2")
-            chk.create_rectangle(1, 1, 15, 15, outline=C["muted"], width=1.4)
-            chk.pack(side="left", anchor="n", pady=(3, 0), padx=(0, 9))
-            chk.bind("<Button-1>", lambda e, task=t: self.finish_task(task))
-            sub = f"  ({sum(1 for c in t.get('children', []) if c['done'])}/{len(t['children'])})" \
-                if t.get("children") else ""
-            lbl = tk.Label(row, text=t["text"] + sub, font=F["body"], fg=C["text"], bg=C["card"],
-                           anchor="w", justify="left")
-            lbl.pack(side="left", fill="x", expand=True)
-            self.wraps.append((lbl, "task"))
-        if len(tasks) > 6:
-            tk.Label(card.inner, text=f"+ {len(tasks) - 6} more", font=F["small"], fg=C["muted"],
-                     bg=C["card"]).pack(anchor="w", pady=(4, 0))
-        return card
-
     def on_width(self, width):
         self.width = width
         # the clock fills ~88% of the free width, leaving air on the right
-        avail = max(150, (width - 2 * PAD - (48 if not self.h24 else 0)) * 0.88)
+        avail = max(150, (width - 2 * PAD - (48 if not self.h24 else 0)) * 0.80)
         size = int(100 * avail / max(1, self.clock_width(self.measure)))
         self.F["clock"].configure(size=max(28, min(84, size)))
         if hasattr(self, "clock_cv"):
@@ -1652,6 +1808,7 @@ class GlanceView:
                 lbl.config(wraplength=max(60, wl))
             except tk.TclError:
                 pass
+        self.root.after_idle(self.equalize)
 
     # ---- calendar ------------------------------------------------------------------
 
@@ -1705,7 +1862,7 @@ class GlanceView:
             b = tk.Label(nav, text=txt, font=F["title"], fg=C["muted"], bg=fill, cursor="hand2", padx=7)
             b.pack(side="right")
             b.bind("<Button-1>", lambda e, d=delta: self.shift_month(d))
-        pill(nav, "TODAY", self.cal_today, C, F, primary=False, bg=fill).pack(side="right", padx=(0, 6))
+        pill(nav, "Today", self.cal_today, C, F, primary=False, bg=fill).pack(side="right", padx=(0, 6))
 
         tk.Frame(box, height=1, bg=C["line"]).pack(fill="x", pady=(10, 8))
         grid = tk.Frame(box, bg=fill)
@@ -1776,9 +1933,9 @@ class GlanceView:
         C, F = self.C, self.F
         fill = C["card"]
         d = self.cal_sel
-        label = f"{d:%A}, {d:%B} {d.day}".upper()
+        label = f"{d:%A}, {d:%B} {d.day}"
         if d == date.today():
-            label += "  ·  TODAY"
+            label += "  ·  Today"
         tk.Label(box, text=label, font=F["small_b"], fg=C["muted"], bg=fill).pack(anchor="w", pady=(0, 4))
         events = self.events_on(d)
         tasks = self.app.data["days"].get(d.isoformat(), [])
@@ -1841,14 +1998,14 @@ class GlanceView:
         now = datetime.now()
         self.draw_clock(now.strftime("%H:%M:%S" if self.h24 else "%I:%M:%S"))
         self.ampm_lbl.config(text="" if self.h24 else now.strftime("%p"))
-        self.date_lbl.config(text=f"{now:%A}, {now:%B} {now.day}".upper())
-        w = self.cache["weather"].get(city_key(self.settings["cities"][0])) if self.settings["cities"] else None
+        self.date_lbl.config(text=f"{now:%A}, {now:%B} {now.day}")
+        w = self.cache["weather"].get(city_key(self.selected_city()[1])) if self.settings["cities"] else None
         if w and w.get("sunrise"):
             try:
                 sr, ss = datetime.fromisoformat(w["sunrise"]), datetime.fromisoformat(w["sunset"])
                 mins = int((ss - sr).total_seconds() // 60)
-                self.sun_lbl.config(text=f"Sun  {fmt_time(sr, self.h24)} – {fmt_time(ss, self.h24)}"
-                                         f"  ({mins // 60}h {mins % 60:02d}m)")
+                self.sun_lbl.config(text=f"Sunrise {fmt_time(sr, self.h24)}   ·   Sunset {fmt_time(ss, self.h24)}"
+                                         f"   ·   {mins // 60}h {mins % 60:02d}m daylight")
             except ValueError:
                 pass
 
@@ -1894,7 +2051,8 @@ class GlanceView:
 
         for city in self.settings["cities"][:2]:
             k = city_key(city)
-            if stale(self.cache["weather"].get(k, {}).get("fetched"), 15):
+            entry = self.cache["weather"].get(k, {})
+            if stale(entry.get("fetched"), 15) or "hourly" not in entry:
                 self.app.run_bg(lambda c=city: fetch_weather(c["lat"], c["lon"]),
                                 lambda res, err, k=k: self.got_weather(k, res, err))
         url = self.settings.get("ics_url")
@@ -1997,8 +2155,8 @@ class GlanceView:
         d.search, d.entry = search, entry
         btns = tk.Frame(body, bg=C["bg"])
         btns.pack(fill="x", pady=(12, 0))
-        pill(btns, "SEARCH", search, C, F).pack(side="left")
-        pill(btns, "CANCEL", d.destroy, C, F, primary=False).pack(side="left", padx=(8, 0))
+        pill(btns, "Search", search, C, F).pack(side="left")
+        pill(btns, "Cancel", d.destroy, C, F, primary=False).pack(side="left", padx=(8, 0))
         entry.focus_set()
 
     def calendar_menu(self, e):
@@ -2072,8 +2230,8 @@ class GlanceView:
 
         btns = tk.Frame(body, bg=C["bg"])
         btns.pack(fill="x", pady=(12, 0))
-        pill(btns, "CONNECT", save, C, F).pack(side="left")
-        pill(btns, "CANCEL", d.destroy, C, F, primary=False).pack(side="left", padx=(8, 0))
+        pill(btns, "Connect", save, C, F).pack(side="left")
+        pill(btns, "Cancel", d.destroy, C, F, primary=False).pack(side="left", padx=(8, 0))
         entry.bind("<Return>", lambda e: save())
         entry.focus_set()
 
@@ -2111,7 +2269,7 @@ class NotesView:
         head = tk.Frame(self.parent, bg=C["bg"])
         head.pack(fill="x", padx=PAD, pady=(0, GAP + 6))
         tk.Label(head, text="NOTES", font=F["day"], fg=C["text"], bg=C["bg"]).pack(side="left")
-        pill(head, "+ NEW", self.new_note, C, F).pack(side="right")
+        pill(head, "+ New", self.new_note, C, F).pack(side="right")
 
         self.scroll = ScrollArea(self.parent, C, on_width=self.rewrap)
         self.scroll.pack(fill="both", expand=True)

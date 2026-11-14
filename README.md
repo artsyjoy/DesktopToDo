@@ -23,10 +23,16 @@ A to-do list, notes and "at a glance" dashboard that lives on your Windows deskt
 
 ## At a glance tab (opens first)
 
-- A big clock (12h / 24h toggle) with today's date and sunrise/sunset.
-- Weather for two places (Glenwood Springs and Basalt, CO to start). Click **···** on a weather card
-  to change the city, switch °F/°C, or refresh. Weather comes from open-meteo.com (free, no account).
-- **Up next:** your upcoming Outlook meetings for the next week, with a one-line brief of today
+Inspired by Rivian's app: light grey / dark grey surfaces, one orange accent, pill switches and round buttons.
+
+- A big centred clock (12h / 24h switch) with the date, sunrise, sunset and hours of daylight.
+- **Up next** (orange tile): your next meeting and how soon it starts. **Tasks today** (dark tile): how many
+  tasks are left; click it to open the To-do tab.
+- Weather for two places (Glenwood Springs and Basalt, CO to start); switch between them with the pill at the
+  top of the weather card. Shows temperature, feels-like, high/low, the next 6 hours, and tiles for humidity,
+  wind, precipitation chance and UV. Click **···** to change a city, switch °F/°C, or refresh.
+  Weather comes from open-meteo.com (free, no account).
+- **This week:** your upcoming Outlook meetings for the next week, with a one-line brief of today
   ("Today: 2 events · 3 tasks left").
   Click **+ CONNECT OUTLOOK** and follow the 3 steps: in Outlook on the web, *Settings → Calendar →
   Shared calendars → Publish a calendar*, then paste the **ICS** link. Refreshes every 10 minutes.
