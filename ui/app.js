@@ -643,11 +643,10 @@ function buildTodo() {
   let html = "";
   for (let i = 0; i < 7; i++) {
     const d = addDays(today, i); const iso = isoOf(d);
-    html += `<div class="band ${iso === ui.todoOpen ? "open" : ""}" style="--i:${i}" data-iso="${iso}">
+    html += `<div class="band ${iso === ui.todoOpen ? "open" : ""} ${i === 0 ? "today" : ""}" data-iso="${iso}">
       <button class="band-head"><span class="dayname">${DAYS[d.getDay()]}</span><span class="count"></span></button>
       <div class="acc"><div><div class="acc-body"></div></div></div></div>`;
   }
-  html += `<div class="band todo-fill" style="--i:6"></div>`;
   inner.innerHTML = html;
   $$(".band[data-iso]", inner).forEach(b => renderBand(b.dataset.iso, inner));
   inner.addEventListener("click", e => {
@@ -734,14 +733,39 @@ function buildEditor(focusTitle = false) {
   title.addEventListener("input", changed);
   title.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); body.focus(); } });
   body.addEventListener("input", changed);
+  const block = () => {               // the paragraph / heading / bullet the caret is in
+    const sel = getSelection(); if (!sel.rangeCount) return null;
+    let n = sel.anchorNode; if (n && n.nodeType === 3) n = n.parentNode;
+    while (n && n !== body && !/^(DIV|H3|LI|P)$/.test(n.tagName)) n = n.parentNode;
+    return n && n !== body && body.contains(n) ? n : null;
+  };
+  const toggleHeading = () => {
+    const b = block();
+    if (b && b.tagName === "H3") {      // heading off: back to a normal body-text line
+      const div = document.createElement("div");
+      div.innerHTML = b.innerHTML || "<br>";
+      b.replaceWith(div);
+      const r = document.createRange(); r.selectNodeContents(div); r.collapse(false);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    } else document.execCommand("formatBlock", false, "h3");
+  };
   const tools = () => {
+    const b = block();
     $$(".tool", page).forEach(t => {
       const c = t.dataset.cmd;
-      const on = c === "bold" ? document.queryCommandState("bold") : c === "list" ? document.queryCommandState("insertUnorderedList")
-        : String(document.queryCommandValue("formatBlock")).toLowerCase() === "h3";
+      const on = c === "bold" ? document.queryCommandState("bold") : c === "list" ? !!(b && b.closest("li"))
+        : !!(b && b.tagName === "H3");
       t.classList.toggle("on", on && document.activeElement === body);
     });
   };
+  body.addEventListener("keydown", e => {   // Tab nests a bullet, Shift+Tab un-nests it
+    if (e.key !== "Tab") return;
+    e.preventDefault();                     // keep focus inside the note
+    const b = block();
+    if (b && b.closest("li")) document.execCommand(e.shiftKey ? "outdent" : "indent");
+    else if (!e.shiftKey) document.execCommand("insertText", false, " ");
+    changed(); tools();
+  });
   document.addEventListener("selectionchange", tools);
   $(".editor-bar", page).addEventListener("mousedown", e => { if (e.target.closest(".tool")) e.preventDefault(); });
   $(".editor-bar", page).addEventListener("click", e => {
@@ -750,7 +774,7 @@ function buildEditor(focusTitle = false) {
     body.focus();
     if (t.dataset.cmd === "bold") document.execCommand("bold");
     if (t.dataset.cmd === "list") document.execCommand("insertUnorderedList");
-    if (t.dataset.cmd === "h3") document.execCommand("formatBlock", false, String(document.queryCommandValue("formatBlock")).toLowerCase() === "h3" ? "div" : "h3");
+    if (t.dataset.cmd === "h3") toggleHeading();
     changed(); tools();
   });
   setTimeout(() => { if (focusTitle) title.focus(); }, 380);
@@ -786,13 +810,13 @@ function wireChrome() {
   });
   document.addEventListener("contextmenu", e => { if (!e.target.closest("input, [contenteditable]")) e.preventDefault(); });
 
-  // resize from the corner grip
+  // resize from the handle on the bottom edge: height only, the widget keeps its width
   const grip = $("#grip");
   grip.addEventListener("pointerdown", e => {
     grip.setPointerCapture(e.pointerId);
-    const sx = e.screenX, sy = e.screenY, w0 = innerWidth, h0 = innerHeight; let raf = 0, last = null;
+    const sy = e.screenY, w0 = innerWidth, h0 = innerHeight; let raf = 0, last = null;
     call("report_size", innerWidth);
-    const move = ev => { last = [w0 + ev.screenX - sx, h0 + ev.screenY - sy]; if (!raf) raf = requestAnimationFrame(() => { raf = 0; call("resize", ...last); }); };
+    const move = ev => { last = [w0, h0 + ev.screenY - sy]; if (!raf) raf = requestAnimationFrame(() => { raf = 0; call("resize", ...last); }); };
     const up = () => { grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", up); };
     grip.addEventListener("pointermove", move); grip.addEventListener("pointerup", up);
   });

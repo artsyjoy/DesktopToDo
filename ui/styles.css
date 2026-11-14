@@ -50,8 +50,13 @@ input::placeholder { color: var(--faint); }
 .page { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; will-change: transform; }
 .page::-webkit-scrollbar { display: none; }
 .page-inner { padding: 4px var(--pad) 28px; }
-.grip { position: fixed; right: 4px; bottom: 4px; width: 16px; height: 16px; cursor: nwse-resize; opacity: .5; z-index: 5; }
-.grip svg { display: block; }
+/* height-only resize handle centred on the bottom edge */
+.grip { position: fixed; left: 50%; bottom: 0; width: 120px; height: 12px; margin-left: -60px; cursor: ns-resize; z-index: 5;
+  display: grid; place-items: center; }
+.grip::before { content: ""; width: 36px; height: 4px; border-radius: 2px; background: var(--faint); opacity: .45;
+  transition: opacity .2s, width .25s var(--ease); }
+.grip:hover::before { opacity: .9; width: 48px; }
+.grip svg { display: none; }
 
 /* ---------- segmented pill (tabs, 12h/24h, city) ---------- */
 .seg { position: relative; display: inline-flex; padding: 3px; background: var(--chip); border-radius: 999px; flex: none; }
@@ -155,20 +160,25 @@ input::placeholder { color: var(--faint); }
 .add { padding: 12px 0 2px; }
 
 /* ---------- to-do ---------- */
-.todo .page-inner { padding: 0; }
-.band { background: color-mix(in srgb, var(--bg), var(--shade-to) calc(var(--i) * var(--shade-step))); }
-.band-head { display: flex; align-items: baseline; width: 100%; padding: 14px var(--pad) 12px; text-align: left; }
-.band:first-child .band-head { padding-top: 2px; }
-.dayname { font-weight: 800; font-size: 30px; letter-spacing: .5px; text-transform: uppercase; }
+/* Flat list, no gradients: the open day lifts onto a bright card, today stays full-strength,
+   the other days recede so the eye lands on what matters. */
+.todo .page-inner { padding: 0 10px 28px; }
+.band { border-radius: var(--radius); margin-bottom: 4px; background: transparent;
+  transition: background-color .35s var(--ease), box-shadow .35s var(--ease); }
+.band.open { background: var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 10px 28px rgba(0,0,0,.07); }
+:root.dark .band.open { box-shadow: none; }
+.band-head { display: flex; align-items: baseline; width: 100%; padding: 14px 12px 12px; text-align: left; }
+.dayname { font-weight: 800; font-size: 30px; letter-spacing: .5px; text-transform: uppercase;
+  color: color-mix(in srgb, var(--text) 40%, var(--bg)); transition: color .3s var(--ease); }
+.band.today .dayname, .band.open .dayname, .band-head:hover .dayname { color: var(--text); }
 .band-head .count { margin-left: auto; color: var(--muted); font-weight: 600; font-size: 12.5px; opacity: 1; transition: opacity .25s; }
 .band.open .band-head .count { opacity: 0; }
 .acc { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .38s var(--ease); }
 .band.open .acc { grid-template-rows: 1fr; }
 .acc > div { overflow: hidden; min-height: 0; }
-.acc-body { padding: 0 var(--pad) 18px; opacity: 0; transform: translateY(-6px); transition: opacity .3s var(--ease), transform .38s var(--ease); }
+.acc-body { padding: 0 12px 18px; opacity: 0; transform: translateY(-6px); transition: opacity .3s var(--ease), transform .38s var(--ease); }
 .band.open .acc-body { opacity: 1; transform: none; }
 .band-sub { color: var(--muted); font-size: 12.5px; margin: -4px 0 10px; }
-.todo-fill { min-height: 100%; }
 
 /* ---------- notes ---------- */
 .notes-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
@@ -190,6 +200,8 @@ input::placeholder { color: var(--faint); }
 .note-body:empty::before { content: "Start writing..."; color: var(--faint); }
 .note-body h3 { font-weight: 600; font-size: 19px; margin: 12px 0 4px; }
 .note-body ul { margin: 2px 0; padding-left: 22px; }
+.note-body ul ul { list-style: circle; margin: 0; }
+.note-body ul ul ul { list-style: square; }
 
 /* ---------- menus & sheets ---------- */
 .menu { position: fixed; z-index: 50; min-width: 190px; padding: 6px; background: var(--card); border-radius: 14px;
