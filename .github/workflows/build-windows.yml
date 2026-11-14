@@ -2,7 +2,7 @@ name: Build DeskTodo for Windows
 
 on:
   push:
-    paths: ["desktodo.pyw", "fonts/**", "assets/**", ".github/workflows/build-windows.yml"]
+    paths: ["desktodo.pyw", "fonts/**", "assets/**", "version_info.txt", ".github/workflows/build-windows.yml"]
   workflow_dispatch:
 
 jobs:
@@ -13,16 +13,41 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pyinstaller tzdata
+
+      # Compile PyInstaller's launcher from source instead of using the shared prebuilt one.
+      # The prebuilt launcher is in lots of unrelated programs, which is the usual reason
+      # antivirus wrongly flags PyInstaller apps.
+      - name: Install PyInstaller (launcher built from source)
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+        run: |
+          pip install tzdata
+          pip install --no-binary pyinstaller pyinstaller
+
       # Checks live weather + city search and the Outlook calendar parser on Windows.
       - run: python desktodo.pyw --selftest
-      - run: >
-          pyinstaller --onefile --windowed --name DeskTodo
-          --icon assets/desktodo.ico
+
+      # A normal app folder (DeskTodo.exe + _internal), not a self-extracting single file:
+      # self-extracting exes are what antivirus is most suspicious of.
+      - name: Build
+        run: >
+          pyinstaller --onedir --windowed --noupx --name DeskTodo
+          --icon assets/desktodo.ico --version-file version_info.txt
           --add-data "fonts;fonts" --add-data "assets;assets"
           --collect-data tzdata --hidden-import tzdata
           desktodo.pyw
+
+      - name: Scan with Microsoft Defender
+        shell: pwsh
+        run: |
+          $mp = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
+          if (-not (Test-Path $mp)) { Write-Host "Defender not available on this runner"; exit 0 }
+          & $mp -SignatureUpdate | Out-Host
+          & $mp -Scan -ScanType 3 -File "$PWD\dist\DeskTodo" -DisableRemediation | Out-Host
+          if ($LASTEXITCODE -eq 2) { Write-Error "Defender flagged the build"; exit 1 }
+          Write-Host "Defender: no threats found"
+
       - uses: actions/upload-artifact@v4
         with:
           name: DeskTodo-windows
-          path: dist/DeskTodo.exe
+          path: dist/DeskTodo/
