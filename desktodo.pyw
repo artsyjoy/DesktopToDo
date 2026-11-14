@@ -48,6 +48,7 @@ class Api:
         self._lock = threading.Lock()
         self._hwnd = None          # native window handle, set once the window is shown
         self._resizing = False
+        self._fg = None            # the app in front, as last seen by the desktop-layer task
         s = self._data.setdefault("settings", {})
         # where the widget lives; older versions only had "keep on top" (on_top)
         self._layer = s.get("layer") or ("top" if s.get("on_top") else "desktop")
@@ -151,46 +152,47 @@ class Api:
         """Where the widget lives: "top" (above all apps), "desktop" (behind apps, like a desktop widget)
         or "normal" (an ordinary window)."""
         self._layer = layer if layer in ("top", "desktop", "normal") else "desktop"
-        if self._window:
-            self._window.on_top = self._layer == "top"
+        self._fg = None                       # let the background task look again right away
+        self._apply_layer()
         log.info("Window layer: %s", self._layer)
+
+    def _apply_layer(self):
+        """Set or clear "always on top" with a plain Win32 request that never waits for the window
+        (pywebview's on_top waits on the window's thread, which could freeze 1.5.6)."""
+        if sys.platform != "win32" or not self._hwnd:
+            return
+        try:
+            u32 = win32()
+            after = HWND_TOPMOST if self._layer == "top" else HWND_NOTOPMOST
+            u32.SetWindowPos(self._hwnd, after, 0, 0, 0, 0, SWP_KEEP | SWP_ASYNC)
+        except Exception:
+            log.warning("Layer change failed: %s", traceback.format_exc())
 
     def _layer_loop(self):
         """Desktop mode: keep the widget behind other apps, and bring it back when the desktop is shown
-        (for example with Win+D). Runs in the background, a few times a second, using plain Win32 calls."""
+        (for example with Win+D). Runs in the background a few times a second. Every window change it
+        makes is posted without waiting, so it can never block the window."""
         import ctypes
         import time
-        from ctypes import wintypes as wt
-        u32 = ctypes.windll.user32
-        u32.GetForegroundWindow.restype = wt.HWND
-        u32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
-        u32.IsWindow.argtypes = u32.IsIconic.argtypes = u32.IsWindowVisible.argtypes = [wt.HWND]
-        u32.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
-        u32.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
-        HWND_TOP, HWND_BOTTOM = 0, 1
-        KEEP = 0x0001 | 0x0002 | 0x0010            # no size, no move, no activate
+        u32 = win32()
         name = ctypes.create_unicode_buffer(64)
-        state = None
-        while self._hwnd and u32.IsWindow(self._hwnd):
+        hwnd = self._hwnd
+        while self._hwnd and u32.IsWindow(hwnd):
             try:
                 if self._layer == "desktop" and not self._resizing:
                     fg = u32.GetForegroundWindow()
-                    if fg and fg != self._hwnd:
+                    if fg and fg != hwnd:
                         u32.GetClassNameW(fg, name, 64)
-                        if name.value in ("WorkerW", "Progman"):          # the desktop is showing
-                            if u32.IsIconic(self._hwnd) or not u32.IsWindowVisible(self._hwnd):
-                                u32.ShowWindow(self._hwnd, 4)               # SW_SHOWNOACTIVATE
-                                state = None
-                            if state != "desktop":
-                                u32.SetWindowPos(self._hwnd, HWND_TOP, 0, 0, 0, 0, KEEP)
-                                state = "desktop"
-                        elif state != "behind":                         # an app is in front: tuck behind
-                            u32.SetWindowPos(self._hwnd, HWND_BOTTOM, 0, 0, 0, 0, KEEP)
-                            state = "behind"
-                    else:
-                        state = None                                    # you're using the widget
+                        on_desktop = name.value in ("WorkerW", "Progman")
+                        if on_desktop and (u32.IsIconic(hwnd) or not u32.IsWindowVisible(hwnd)):
+                            u32.ShowWindowAsync(hwnd, 4)                # SW_SHOWNOACTIVATE
+                            self._fg = None
+                        if fg != self._fg:                              # something new is in front
+                            after = HWND_TOP if on_desktop else HWND_BOTTOM
+                            u32.SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_KEEP | SWP_ASYNC)
+                    self._fg = fg                                       # (your own clicks leave it alone)
                 else:
-                    state = None
+                    self._fg = None
             except Exception:
                 log.warning("Layer loop: %s", traceback.format_exc())
             time.sleep(0.25)
@@ -255,7 +257,8 @@ class Api:
         def run():
             if sys.platform == "win32" and self._hwnd:
                 info.update(self._smoke_resize())
-                info["ok"] = bool(info.get("ok") and info.get("resize_ok") and info.get("responsive"))
+                info["ok"] = bool(info.get("ok") and info.get("resize_ok") and info.get("responsive")
+                                  and info.get("layers_ok") and info.get("responsive_after_layers"))
             out = os.path.join(tempfile.gettempdir(), "desktodo_smoke.json")
             with open(out, "w", encoding="utf-8") as f:
                 json.dump(info, f)
@@ -295,8 +298,54 @@ class Api:
         result = {}
         t = threading.Thread(target=lambda: result.update(js=self._window.evaluate_js("1 + 1")), daemon=True)
         t.start(); t.join(5)                                      # the page must still answer quickly
-        return {"height_before": before, "height_after": after, "resize_ok": after - before >= 60,
+        info = {"height_before": before, "height_after": after, "resize_ok": after - before >= 60,
                 "resize_finished": not self._resizing, "responsive": result.get("js") == 2}
+        info.update(self._smoke_layers())
+        return info
+
+    def _smoke_layers(self):
+        """Toggle the pin back and forth like a person would; the flag must follow and the page must answer."""
+        import time
+        seen, start = [], self._layer
+        for layer in ("top", "desktop", "top", "normal", "desktop") * 2:
+            threading.Thread(target=self.set_layer, args=(layer,), daemon=True).start()
+            time.sleep(0.35)
+            seen.append(is_topmost(self._hwnd) == (layer == "top"))
+        self.set_layer(start)
+        result = {}
+        t = threading.Thread(target=lambda: result.update(js=self._window.evaluate_js("1 + 1")), daemon=True)
+        t.start(); t.join(5)
+        return {"layers_ok": all(seen), "layer_checks": seen, "responsive_after_layers": result.get("js") == 2}
+
+
+HWND_TOP, HWND_BOTTOM, HWND_TOPMOST, HWND_NOTOPMOST = 0, 1, -1, -2
+SWP_KEEP = 0x0001 | 0x0002 | 0x0010        # no size, no move, no activate
+SWP_ASYNC = 0x4000                          # post the change; never wait for the window's thread
+_u32 = None
+
+
+def win32():
+    """user32 with exact signatures, so 64-bit window handles and the special -1/-2 handles pass intact."""
+    global _u32
+    if _u32 is None:
+        import ctypes
+        from ctypes import wintypes as wt
+        u32 = ctypes.WinDLL("user32", use_last_error=True)      # our own copy: no clashes with other code
+        u32.SetWindowPos.argtypes = [wt.HWND, ctypes.c_ssize_t, ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int, wt.UINT]
+        u32.SetWindowPos.restype = wt.BOOL
+        u32.ShowWindowAsync.argtypes = [wt.HWND, ctypes.c_int]
+        u32.GetForegroundWindow.restype = wt.HWND
+        u32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+        u32.IsWindow.argtypes = u32.IsIconic.argtypes = u32.IsWindowVisible.argtypes = [wt.HWND]
+        u32.GetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
+        u32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        _u32 = u32
+    return _u32
+
+
+def is_topmost(hwnd):
+    return bool(win32().GetWindowLongPtrW(hwnd, -20) & 0x8)     # GWL_EXSTYLE has WS_EX_TOPMOST
 
 
 def on_shown(window, api):
@@ -309,6 +358,7 @@ def on_shown(window, api):
         log.warning("Could not read the window handle: %s", traceback.format_exc())
     round_corners(window, api._hwnd)
     if api._hwnd:
+        api._apply_layer()
         threading.Thread(target=api._layer_loop, daemon=True).start()
 
 
@@ -481,7 +531,7 @@ def run():
         frameless=True,
         easy_drag=False,
         min_size=(360, 440),
-        on_top=api._layer == "top",
+        on_top=False,                 # the layer is applied natively once the window is shown
         background_color="#0f0f0f" if dark else "#e8e8e6",
         text_select=True,
         **kwargs,
