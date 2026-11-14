@@ -254,7 +254,9 @@ def run():
                 with open(out, "w", encoding="utf-8") as f:
                     json.dump({"ok": False, "error": "timeout", "renderer": getattr(webview, "renderer", "?")}, f)
             window.destroy()
-        threading.Timer(60, give_up).start()
+        t = threading.Timer(60, give_up)
+        t.daemon = True  # don't keep the app alive after its window closes
+        t.start()
     # WebView2 only: the old Internet Explorer engine can't run this interface.
     gui = "edgechromium" if sys.platform == "win32" else None
     log.info("Starting window (gui=%s)", gui)
