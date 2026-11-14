@@ -22,10 +22,14 @@ import webbrowser
 import core
 
 SMOKE = "--smoketest" in sys.argv
-LOG_FILE = os.path.join(tempfile.gettempdir(), "desktodo.log")
-if SMOKE or os.environ.get("DESKTODO_LOG"):
-    logging.basicConfig(filename=LOG_FILE, filemode="w", level=logging.DEBUG,
+# Every start writes a short log next to the data file (the CI smoke test logs to %TEMP%).
+LOG_FILE = os.path.join(tempfile.gettempdir() if SMOKE else core.data_dir(), "desktodo.log")
+try:
+    logging.basicConfig(filename=LOG_FILE, filemode="w",
+                        level=logging.DEBUG if SMOKE or os.environ.get("DESKTODO_LOG") else logging.INFO,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
+except OSError:
+    pass
 log = logging.getLogger("desktodo")
 WEBVIEW2_URL = "https://developer.microsoft.com/microsoft-edge/webview2/"
 DEFAULT_W, DEFAULT_H = 420, 780
@@ -179,25 +183,80 @@ def on_screen(geo):
     return False
 
 
-def explain_missing_webview2(exc):
-    """Shown when Windows has no WebView2 runtime (rare on Windows 10/11)."""
-    log.error("Could not start the WebView2 window: %s", exc)
+def webview2_installed():
+    """True if the Edge WebView2 Runtime is registered (machine-wide or for this user)."""
+    if sys.platform != "win32":
+        return True
+    import winreg
+    client = "Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    for root, path in ((winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\" + client),
+                       (winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\" + client),
+                       (winreg.HKEY_CURRENT_USER, "Software\\" + client)):
+        try:
+            with winreg.OpenKey(root, path) as key:
+                version, _ = winreg.QueryValueEx(key, "pv")
+                if version and version != "0.0.0.0":
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def message_box(text, buttons=0x40):
+    """Plain Windows message box (0x40 = OK with an info icon). Returns the button pressed."""
     if SMOKE or sys.platform != "win32":
-        return
+        return 0
     try:
         import ctypes
+        return ctypes.windll.user32.MessageBoxW(None, text, core.APP_NAME, buttons)
+    except Exception:
+        return 0
+
+
+def explain_start_failure(exc):
+    """Say what actually went wrong, instead of guessing."""
+    if not webview2_installed():
         msg = ("DeskTodo needs the Microsoft Edge WebView2 Runtime, which is missing on this PC.\n\n"
                "Click OK to open Microsoft's download page, install the \"Evergreen\" runtime, "
                "then start DeskTodo again.")
-        if ctypes.windll.user32.MessageBoxW(None, msg, core.APP_NAME, 0x41) == 1:  # OK / Cancel
+        if message_box(msg, 0x41) == 1:  # OK / Cancel
             webbrowser.open(WEBVIEW2_URL)
+        return
+    message_box("DeskTodo couldn't open its window.\n\n"
+                f"{type(exc).__name__}: {str(exc)[:300]}\n\n"
+                "If another DeskTodo is still running, close it (Task Manager > DeskTodo > End task) "
+                f"and start DeskTodo again.\n\nDetails were saved to:\n{LOG_FILE}", 0x30)
+
+
+_instance_mutex = None
+
+
+def already_running():
+    """Allow one DeskTodo at a time. If one is open, bring its window to the front."""
+    global _instance_mutex
+    if sys.platform != "win32" or SMOKE:
+        return False
+    try:
+        import ctypes
+        k32, u32 = ctypes.windll.kernel32, ctypes.windll.user32
+        _instance_mutex = k32.CreateMutexW(None, False, "Local\\DeskTodo.SingleInstance")
+        if k32.GetLastError() != 183:  # ERROR_ALREADY_EXISTS
+            return False
+        hwnd = u32.FindWindowW(None, core.APP_NAME)
+        if hwnd:
+            u32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            u32.SetForegroundWindow(hwnd)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def main():
     if "--selftest" in sys.argv:
         sys.exit(0 if core.selftest() else 1)
+    if already_running():
+        log.info("Another DeskTodo is running; brought it to the front.")
+        return
     try:
         run()
     except Exception as exc:
@@ -205,7 +264,7 @@ def main():
         if SMOKE:
             with open(os.path.join(tempfile.gettempdir(), "desktodo_smoke.json"), "w", encoding="utf-8") as f:
                 json.dump({"ok": False, "error": traceback.format_exc()}, f)
-        explain_missing_webview2(exc)
+        explain_start_failure(exc)
         sys.exit(1)
 
 
@@ -224,6 +283,10 @@ def run():
     geo = settings.get("window") or {}
     dark = settings.get("theme", "dark") == "dark"
     kwargs = {}
+    log.info("Starting DeskTodo; saved window: %s", geo)
+    if not (isinstance(geo.get("w"), (int, float)) and 300 <= geo["w"] <= 4000
+            and isinstance(geo.get("h"), (int, float)) and 300 <= geo["h"] <= 4000):
+        geo = {}  # ignore a broken saved size (e.g. saved while minimised)
     if geo.get("w") and geo.get("h"):
         kwargs.update(width=geo["w"], height=geo["h"])
         if "x" in geo and on_screen(geo):
