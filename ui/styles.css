@@ -106,24 +106,22 @@ input::placeholder { color: var(--faint); }
 .is-analog .clock, .analog { display: none; }
 .is-analog .analog { display: block; }
 
-/* analog face: a quiet dial with minute marks, numerals, plain hands and an accent second hand */
+/* analog face: minimalist dial, fine marks only, slim needle hands and an accent second hand */
 .analog { position: relative; width: min(100%, 290px); aspect-ratio: 1; margin: 0 auto; }
 .analog svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-.analog .ticks line { stroke: var(--clock-mark); stroke-width: .75; stroke-linecap: round; opacity: .8; }
-.analog .nums text { fill: var(--clock-mark); font: 500 12.5px "Barlow", sans-serif; text-anchor: middle; dominant-baseline: central; }
+.analog .ticks line { stroke: var(--clock-mark); stroke-linecap: butt; }
+.analog .ticks .min { stroke-width: .6; opacity: .7; }
+.analog .ticks .hr { stroke-width: .9; }
+.analog .ticks .q { stroke-width: 1.1; }
 .analog .hand { animation: spin linear infinite; will-change: transform; }
 .analog .hand line { stroke: var(--clock-hand); stroke-linecap: round; }
 .analog .hand.h { animation-duration: 43200s; }
-.analog .hand.h line { stroke-width: 6.6; }
-.analog .hand.h line.lume, .analog .hand.m line.lume { stroke: color-mix(in srgb, var(--clock-hand) 72%, #9fc8a8); stroke-width: 1.5; }
+.analog .hand.h line { stroke-width: 2.1; }
 .analog .hand.m { animation-duration: 3600s; }
-.analog .hand.m line { stroke-width: 4.8; }
+.analog .hand.m line { stroke-width: 1.4; }
 .analog .hand.s { animation-duration: 60s; }
-.analog .hand.s line { stroke: var(--accent); }
-.analog .hand.s .needle { stroke-width: 1.3; }
-.analog .hand.s .tail { stroke-width: 4.6; }
+.analog .hand.s line { stroke: var(--accent); stroke-width: .8; }
 .analog .hand.s circle { fill: var(--accent); }
-.analog .hand.s .pin { fill: color-mix(in srgb, var(--accent) 70%, #000); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .info .segs { display: flex; gap: 6px; flex: none; }
 .is-analog [data-seg="clock"] { display: none; }

@@ -396,21 +396,20 @@ function setClockFace(face) {
   g.clockWrap.animate([{ opacity: 0, transform: "scale(.97)" }, { opacity: 1, transform: "none" }], { duration: 320, easing: EASE });
 }
 function analogHTML() {
+  // a minimalist dial: no numerals, a full ring of fine marks, longer marks for the hours, slim needle hands
   const P = (r, deg) => { const a = deg * Math.PI / 180; return [(100 + r * Math.sin(a)).toFixed(2), (100 - r * Math.cos(a)).toFixed(2)]; };
-  let ticks = "", nums = "";
+  let ticks = "";
   for (let i = 0; i < 60; i++) {
-    if (i % 5 === 0) continue;
-    const [x1, y1] = P(87.4, i * 6), [x2, y2] = P(91.15, i * 6);   // short marks, centred on the numerals
-    ticks += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+    const kind = i % 15 === 0 ? "q" : i % 5 === 0 ? "hr" : "min";
+    const inner = { q: 82, hr: 84.5, min: 89.5 }[kind];
+    const [x1, y1] = P(inner, i * 6), [x2, y2] = P(95, i * 6);
+    ticks += `<line class="${kind}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
   }
-  // the numerals sit in the ring of minute marks, taking the place of the hour marks
-  for (let hr = 1; hr <= 12; hr++) { const [x, y] = P(89.3, hr * 30); nums += `<text x="${x}" y="${y}">${hr}</text>`; }
   const hand = (cls, body) => `<svg class="hand ${cls}" viewBox="0 0 200 200" aria-hidden="true">${body}</svg>`;
-  return `<svg class="face" viewBox="0 0 200 200" role="img" aria-label="Analog clock">
-      <g class="ticks">${ticks}</g><g class="nums">${nums}</g></svg>
-    ${hand("h", '<line x1="100" y1="100" x2="100" y2="47"/><line class="lume" x1="100" y1="58" x2="100" y2="49"/>')}
-    ${hand("m", '<line x1="100" y1="100" x2="100" y2="17"/><line class="lume" x1="100" y1="30" x2="100" y2="19.5"/>')}
-    ${hand("s", '<line class="needle" x1="100" y1="100" x2="100" y2="13"/><line class="tail" x1="100" y1="100" x2="100" y2="117"/><circle cx="100" cy="100" r="5"/><circle class="pin" cx="100" cy="100" r="2"/>')}`;
+  return `<svg class="face" viewBox="0 0 200 200" role="img" aria-label="Analog clock"><g class="ticks">${ticks}</g></svg>
+    ${hand("h", '<line x1="100" y1="103" x2="100" y2="50"/>')}
+    ${hand("m", '<line x1="100" y1="103" x2="100" y2="15"/>')}
+    ${hand("s", '<line x1="100" y1="114" x2="100" y2="8"/><circle cx="100" cy="100" r="2.6"/>')}`;
 }
 function syncAnalog() {
   // the hands turn with CSS animations (smooth, on the GPU); this lines them up with the real time
