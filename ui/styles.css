@@ -114,7 +114,13 @@ input::placeholder { color: var(--faint); }
 .analog .ticks .hr { stroke-width: .9; }
 .analog .ticks .q { stroke-width: 1.1; }
 .analog .hand { animation: spin linear infinite; will-change: transform; }
-.analog .hand path { fill: var(--clock-hand); }
+.analog .hand path, .analog .hand .hub { fill: var(--clock-hand); }
+.analog .hand path.shade { fill: color-mix(in srgb, var(--clock-hand) 62%, #6b6b6b); }
+/* depth: the hands cast a soft shadow from a light that stays put (the shadow is on the non-turning layer) */
+.analog .hands { position: absolute; inset: 0; filter: drop-shadow(0 2px 1.5px rgba(0,0,0,.28)) drop-shadow(0 6px 8px rgba(0,0,0,.18)); }
+:root.dark .analog .hands { filter: drop-shadow(0 2px 1.5px rgba(0,0,0,.75)) drop-shadow(0 7px 10px rgba(0,0,0,.6)); }
+.analog .hands.sec { filter: drop-shadow(0 2px 1.5px rgba(0,0,0,.22)); }
+:root.dark .analog .hands.sec { filter: drop-shadow(0 2px 2px rgba(0,0,0,.7)); }
 .analog .hand line { stroke-linecap: round; }
 .analog .hand.h { animation-duration: 43200s; }
 .analog .hand.m { animation-duration: 3600s; }

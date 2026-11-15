@@ -406,12 +406,17 @@ function analogHTML() {
     ticks += `<line class="${kind}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
   }
   // a tapered hand: wide where it meets the centre, narrowing to a fine rounded tip
-  const taper = (base, tip, tail, end) => `<path d="M${100 - base / 2} ${tail} L${100 - tip / 2} ${end} Q100 ${end - tip * 0.9} ${100 + tip / 2} ${end} L${100 + base / 2} ${tail} Q100 ${tail + base * 0.75} ${100 - base / 2} ${tail} Z"/>`;
+  // two facets, so each hand has a ridge down the middle that catches the light
+  const taper = (base, tip, tail, end) => {
+    const top = end - tip * 0.9, bot = tail + base * 0.75;
+    return `<path d="M${100 - base / 2} ${tail} L${100 - tip / 2} ${end} Q100 ${top} 100 ${top} L100 ${bot} Q100 ${bot} ${100 - base / 2} ${tail} Z"/>` +
+      `<path class="shade" d="M${100 + base / 2} ${tail} L${100 + tip / 2} ${end} Q100 ${top} 100 ${top} L100 ${bot} Q100 ${bot} ${100 + base / 2} ${tail} Z"/>`;
+  };
   const hand = (cls, body) => `<svg class="hand ${cls}" viewBox="0 0 200 200" aria-hidden="true">${body}</svg>`;
   return `<svg class="face" viewBox="0 0 200 200" role="img" aria-label="Analog clock"><g class="ticks">${ticks}</g></svg>
-    ${hand("h", taper(3.4, 0.6, 102.5, 50))}
-    ${hand("m", taper(2.6, 0.45, 102.5, 14))}
-    ${hand("s", '<line x1="100" y1="114" x2="100" y2="8"/><circle cx="100" cy="100" r="2.6"/>')}`;
+    <div class="hands">${hand("h", taper(3.4, 0.6, 102.5, 50))}
+    ${hand("m", taper(2.6, 0.45, 102.5, 14) + '<circle class="hub" cx="100" cy="100" r="3.4"/>')}</div>
+    <div class="hands sec">${hand("s", '<line x1="100" y1="114" x2="100" y2="8"/><circle cx="100" cy="100" r="2.6"/>')}</div>`;
 }
 function syncAnalog() {
   // the hands turn with CSS animations (smooth, on the GPU); this lines them up with the real time
