@@ -400,7 +400,7 @@ function analogHTML() {
   let ticks = "", nums = "";
   for (let i = 0; i < 60; i++) {
     if (i % 5 === 0) continue;
-    const [x1, y1] = P(85.5, i * 6), [x2, y2] = P(93, i * 6);
+    const [x1, y1] = P(87.4, i * 6), [x2, y2] = P(91.15, i * 6);   // short marks, centred on the numerals
     ticks += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
   }
   // the numerals sit in the ring of minute marks, taking the place of the hour marks
