@@ -420,7 +420,7 @@ function afterGlanceMount() {
   placePill($('[data-seg="clock"]', g.page), false);
   placePill($('[data-seg="face"]', g.page), false);
   const ws = $('[data-seg="city"]', g.page); if (ws) placePill(ws, false);
-  fitClock();
+  fitClock(); syncAnalog();
   new ResizeObserver(() => fitClock()).observe(g.page);
   refreshOnline();
 }
@@ -463,11 +463,18 @@ function analogHTML() {
     <div class="hands sec">${hand("s", '<line x1="100" y1="114" x2="100" y2="8"/><circle cx="100" cy="100" r="2.6"/>')}</div>`;
 }
 function syncAnalog() {
-  // the hands turn with CSS animations (smooth, on the GPU); this lines them up with the real time
-  if (!g.analog || !faceAnalog()) return;
+  // The hands turn with CSS animations (smooth, on the GPU). Each second this checks every hand against the
+  // real time and, if it has drifted, sets that animation's position directly. (1.5.9-1.5.10 changed the delay
+  // instead, which added the time the widget had been open and pushed the hands ahead.)
+  if (!g.analog || !faceAnalog() || !g.analog.isConnected) return;
   const n = new Date(); const s = n.getSeconds() + n.getMilliseconds() / 1000;
   const m = n.getMinutes() * 60 + s, hr = (n.getHours() % 12) * 3600 + m;
-  for (const [cls, t] of [["s", s], ["m", m], ["h", hr]]) $(`.hand.${cls}`, g.analog).style.animationDelay = `-${t.toFixed(3)}s`;
+  for (const [cls, t, dur] of [["s", s, 60], ["m", m, 3600], ["h", hr, 43200]]) {
+    const a = $(`.hand.${cls}`, g.analog).getAnimations()[0]; if (!a) continue;
+    const want = t * 1000, span = dur * 1000;
+    const off = Math.abs(((a.currentTime || 0) % span) - want);
+    if (Math.min(off, span - off) > 120) a.currentTime = want;
+  }
 }
 function renderClock() {
   if (!g.clock) return;
@@ -475,7 +482,7 @@ function renderClock() {
   const hh = pad2(h24() ? now.getHours() : (now.getHours() % 12 || 12));
   g.hh.textContent = hh; g.mm.textContent = pad2(now.getMinutes());
   g.ampm.textContent = h24() ? "" : (now.getHours() < 12 ? "AM" : "PM");
-  if (faceAnalog() && (!g.analogSynced || now.getSeconds() === 0)) { syncAnalog(); g.analogSynced = true; }
+  syncAnalog();
   g.date.textContent = longDate(now);
   const w = wxFor(selCity()[1]);
   if (w && w.sunrise) {
