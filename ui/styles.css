@@ -110,7 +110,7 @@ input::placeholder { color: var(--faint); }
 .analog { position: relative; width: min(100%, 290px); aspect-ratio: 1; margin: 0 auto; }
 .analog svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .analog .ticks line { stroke: var(--clock-mark); stroke-width: .75; stroke-linecap: round; opacity: .8; }
-.analog .nums text { fill: var(--clock-mark); font: 500 12.5px "Barlow", sans-serif; text-anchor: middle; dominant-baseline: central; }
+.analog .nums text { fill: var(--clock-mark); font: 500 9.4px "Barlow", sans-serif; text-anchor: middle; dominant-baseline: central; }
 .analog .hand { animation: spin linear infinite; will-change: transform; }
 .analog .hand line { stroke: var(--clock-hand); stroke-linecap: round; }
 .analog .hand.h { animation-duration: 43200s; }
