@@ -13,7 +13,7 @@
   --accent: #f26b1d; --on-accent: #ffffff;
   --accent-text: color-mix(in srgb, var(--accent) var(--accent-shade, 86%), #000);
   --on-accent-muted: color-mix(in srgb, var(--on-accent) 76%, var(--accent));
-  --clock-face: #fbfbf9; --clock-rim: #cfcfcb; --clock-hand: #1b1b1b; --clock-mark: #3a3a38;
+  --clock-hand: #1b1b1b; --clock-mark: #3a3a38;
   --tile-dark: #2b2b2b; --on-dark: #f2f2f0; --on-dark-muted: #9d9d99;
   --shade-to: #000000; --shade-step: 3.5%;
   --pad: 22px; --gap: 10px; --radius: 20px; --card-pad: 18px;
@@ -24,7 +24,7 @@
   --bg: #0f0f0f; --card: #1c1c1c; --text: #f1f1ef; --muted: #8f8f8b; --faint: #555553;
   --line: #2a2a2a; --chip: #2a2a2a; --seg-on: #e9e9e6; --seg-on-fg: #141414;
   --accent-text: color-mix(in srgb, var(--accent) 88%, #fff);
-  --clock-face: #070707; --clock-rim: #3b3b3a; --clock-hand: #f1f1ef; --clock-mark: #d6d6d3;
+  --clock-hand: #f1f1ef; --clock-mark: #d6d6d3;
   --tile-dark: #2e2e2e; --on-dark: #f2f2f0; --on-dark-muted: #9d9d99;
   --shade-to: #ffffff; --shade-step: 2.8%;
   color-scheme: dark;
@@ -100,7 +100,7 @@ input::placeholder { color: var(--faint); }
 .clock-wrap { margin: 16px 0 18px; }
 .clock { font-family: "Space Grotesk", "Barlow", sans-serif; font-weight: 500; line-height: .84; letter-spacing: -.02em;
   font-variant-numeric: tabular-nums; white-space: nowrap; display: flex; flex-direction: column; align-items: center; }
-.clock .mm { position: relative; }
+.clock .hh { position: relative; }
 .clock .ampm { position: absolute; left: 100%; bottom: .14em; font-family: "Barlow"; font-weight: 800; font-size: 13px;
   color: var(--muted); margin-left: 8px; letter-spacing: 0; line-height: 1; }
 .is-analog .clock, .analog { display: none; }
@@ -109,9 +109,6 @@ input::placeholder { color: var(--faint); }
 /* analog face: a quiet dial with minute marks, numerals, plain hands and an accent second hand */
 .analog { position: relative; width: min(100%, 290px); aspect-ratio: 1; margin: 0 auto; }
 .analog svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-.analog .face { filter: drop-shadow(0 10px 24px rgba(0,0,0,.18)); }
-.analog .rim { fill: none; stroke: var(--clock-rim); stroke-width: 1.4; }
-.analog .dial { fill: var(--clock-face); }
 .analog .ticks line { stroke: var(--clock-mark); stroke-width: .8; stroke-linecap: round; opacity: .75; }
 .analog .nums text { fill: var(--clock-mark); font: 500 13px "Barlow", sans-serif; text-anchor: middle; dominant-baseline: central; }
 .analog .hand { animation: spin linear infinite; will-change: transform; }
@@ -129,7 +126,8 @@ input::placeholder { color: var(--faint); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .info .segs { display: flex; gap: 6px; flex: none; }
 .is-analog [data-seg="clock"] { display: none; }
-.info { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.info { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.info > .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); margin-top: 12px; }
 .tiles .card { margin-top: 0; min-height: 132px; cursor: pointer; transition: transform .2s var(--ease); }
 .tiles .card:active { transform: scale(.98); }

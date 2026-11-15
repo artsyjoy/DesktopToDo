@@ -332,7 +332,7 @@ function buildGlance() {
   $(".page-inner", page).innerHTML = `
     <div class="date" data-g="date"></div>
     <div class="clock-wrap" data-g="clockWrap">
-      <div class="clock" data-g="clock"><div data-g="hh"></div><div class="mm"><span data-g="mm"></span><span class="ampm" data-g="ampm"></span></div></div>
+      <div class="clock" data-g="clock"><div class="hh"><span data-g="hh"></span><span class="ampm" data-g="ampm"></span></div><div><span data-g="mm"></span></div></div>
       <div class="analog" data-g="analog">${analogHTML()}</div>
     </div>
     <div class="info"><span class="label" data-g="sun"></span><div class="segs">
@@ -406,7 +406,6 @@ function analogHTML() {
   for (let hr = 1; hr <= 12; hr++) { const [x, y] = P(82, hr * 30); nums += `<text x="${x}" y="${y}">${hr}</text>`; }
   const hand = (cls, body) => `<svg class="hand ${cls}" viewBox="0 0 200 200" aria-hidden="true">${body}</svg>`;
   return `<svg class="face" viewBox="0 0 200 200" role="img" aria-label="Analog clock">
-      <circle class="rim" cx="100" cy="100" r="98"/><circle class="dial" cx="100" cy="100" r="96"/>
       <g class="ticks">${ticks}</g><g class="nums">${nums}</g></svg>
     ${hand("h", '<line x1="100" y1="110" x2="100" y2="50"/>')}
     ${hand("m", '<line x1="100" y1="112" x2="100" y2="22"/>')}
@@ -422,7 +421,7 @@ function syncAnalog() {
 function renderClock() {
   if (!g.clock) return;
   const now = new Date();
-  const hh = h24() ? pad2(now.getHours()) : String(now.getHours() % 12 || 12);
+  const hh = pad2(h24() ? now.getHours() : (now.getHours() % 12 || 12));
   g.hh.textContent = hh; g.mm.textContent = pad2(now.getMinutes());
   g.ampm.textContent = h24() ? "" : (now.getHours() < 12 ? "AM" : "PM");
   if (faceAnalog() && (!g.analogSynced || now.getSeconds() === 0)) { syncAnalog(); g.analogSynced = true; }
@@ -430,7 +429,8 @@ function renderClock() {
   const w = wxFor(selCity()[1]);
   if (w && w.sunrise) {
     const sr = parseLocal(w.sunrise), ss = parseLocal(w.sunset); const mins = Math.round((ss - sr) / 60000);
-    g.sun.textContent = `Sun  ${fmtTime(sr)} – ${fmtTime(ss)}  (${Math.floor(mins / 60)}h ${pad2(mins % 60)}m)`;
+    const t = d => `${h24() ? pad2(d.getHours()) : d.getHours() % 12 || 12}:${pad2(d.getMinutes())}`;
+    g.sun.textContent = `Sun  ${t(sr)} – ${t(ss)}  (${Math.floor(mins / 60)}h ${pad2(mins % 60)}m)`;
   } else g.sun.textContent = "";
 }
 function fitClock() {
@@ -438,7 +438,7 @@ function fitClock() {
   // two stacked lines, hours over minutes, about half the card wide
   const avail = g.clockWrap.clientWidth;
   g.clock.style.fontSize = "100px";
-  const w = Math.max(g.hh.getBoundingClientRect().width, $(".mm", g.clock).firstElementChild.getBoundingClientRect().width) || 1;
+  const w = Math.max(g.hh.getBoundingClientRect().width, g.mm.getBoundingClientRect().width) || 1;
   g.clock.style.fontSize = Math.max(60, Math.min(168, Math.floor(100 * avail * 0.46 / w))) + "px";
 }
 
