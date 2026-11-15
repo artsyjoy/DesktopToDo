@@ -64,6 +64,7 @@ function rollOver() {
 const ICON = {
   check: '<svg viewBox="0 0 12 12"><path d="M2.5 6.2l2.4 2.4 4.6-5" fill="none" stroke="var(--on-accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   sun: '<svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="2.6" fill="none" stroke="currentColor" stroke-width="1.5"/><g stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M7 .9v1.4M7 11.7v1.4M.9 7h1.4M11.7 7h1.4M2.7 2.7l1 1M10.3 10.3l1 1M2.7 11.3l1-1M10.3 3.7l1-1"/></g></svg>',
+  gear: '<svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 1.2l1 1.6 1.8-.5.5 1.8 1.6 1-1 1.6 1 1.6-1.6 1-.5 1.8-1.8-.5-1 1.6-1-1.6-1.8.5-.5-1.8-1.6-1 1-1.6-1-1.6 1.6-1 .5-1.8 1.8.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
   moon: '<svg viewBox="0 0 14 14"><path d="M11.8 8.6A5.3 5.3 0 0 1 5.4 2.2a5.3 5.3 0 1 0 6.4 6.4z" fill="currentColor"/></svg>',
 };
 const CLOUD = '<path d="M14 36h21a8.5 8.5 0 0 0 0-17 11 11 0 0 0-21.3-2.3A9.6 9.6 0 0 0 14 36z" fill="currentColor"/>';
@@ -137,8 +138,20 @@ function showTab(tab, animate = true) {
 }
 
 // ---------------------------------------------------------------- theme
+const ACCENTS = [["#f26b1d", "Orange"], ["#f5a524", "Amber"], ["#f2c230", "Yellow"], ["#e5484d", "Red"], ["#e93d82", "Pink"],
+  ["#8e4ec6", "Violet"], ["#3e63dd", "Blue"], ["#0d9bb5", "Teal"], ["#30a46c", "Green"], ["#8b8d98", "Graphite"]];
+function applyAccent() {
+  const c = /^#[0-9a-f]{6}$/i.test(S.accent || "") ? S.accent : ACCENTS[0][0];
+  const [r, gg, b] = [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16) / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+  const lum = .2126 * r + .7152 * gg + .0722 * b;            // light accents get dark text on top of them
+  const st = document.documentElement.style;
+  st.setProperty("--accent", c);
+  st.setProperty("--on-accent", lum > .45 ? "#141414" : "#ffffff");
+  st.setProperty("--accent-shade", lum > .45 ? "58%" : lum > .28 ? "74%" : "86%");   // keeps accent text readable on light grey
+}
 function applyTheme() {
   document.documentElement.classList.toggle("dark", S.theme !== "light");
+  applyAccent();
   $("#theme").innerHTML = S.theme === "light" ? ICON.moon : ICON.sun;
 }
 function toggleTheme() {
@@ -174,6 +187,35 @@ function openSheet(html) {
   scrim.addEventListener("pointerdown", e => { if (e.target === scrim) close(); });
   scrim.addEventListener("keydown", e => { if (e.key === "Escape") close(); });
   return { el: scrim.firstElementChild, close };
+}
+function openSettings() {
+  const cur = () => (S.accent || ACCENTS[0][0]).toLowerCase();
+  const custom = () => !ACCENTS.some(([c]) => c === cur());
+  const s = openSheet(`<h2>Settings</h2>
+    <div class="set-label">Accent color</div>
+    <div class="swatches" data-sw>${ACCENTS.map(([c, n]) => `<button class="sw" style="--c:${c}" data-c="${c}" title="${n}" aria-label="${n}"></button>`).join("")}
+      <label class="sw custom" title="Pick any color" aria-label="Pick any color"><input type="color" data-pick></label></div>
+    <div class="set-label">Clock</div>
+    <div class="set-row">${segHTML("set-face", [["digital", "Digital"], ["analog", "Analog"]], S.clock_face === "analog" ? "analog" : "digital", "small")}
+      ${segHTML("set-24", [["12", "12h"], ["24", "24h"]], h24() ? "24" : "12", "small")}</div>
+    <div class="actions"><button class="btn" data-done>Done</button><button class="btn ghost" data-reset>Reset color</button></div>`);
+  const sw = $("[data-sw]", s.el), pick = $("[data-pick]", s.el);
+  const mark = () => {
+    $$(".sw[data-c]", sw).forEach(b => b.classList.toggle("on", b.dataset.c === cur()));
+    const cu = $(".sw.custom", sw); cu.classList.toggle("on", custom()); cu.style.setProperty("--c", custom() ? cur() : "transparent");
+    pick.value = cur();
+  };
+  const set = c => { S.accent = c; applyAccent(); mark(); save(); };
+  sw.addEventListener("click", e => { const b = e.target.closest("[data-c]"); if (b) set(b.dataset.c); });
+  pick.addEventListener("input", () => set(pick.value.toLowerCase()));
+  $('[data-seg="set-face"]', s.el).addEventListener("click", e => {
+    const b = e.target.closest("button"); if (b) { setSeg(b.parentElement, b.dataset.v); setClockFace(b.dataset.v); } });
+  $('[data-seg="set-24"]', s.el).addEventListener("click", e => {
+    const b = e.target.closest("button"); if (b) { setSeg(b.parentElement, b.dataset.v); set24(b.dataset.v === "24"); } });
+  $("[data-done]", s.el).onclick = s.close;
+  $("[data-reset]", s.el).onclick = () => { delete S.accent; applyAccent(); mark(); save(); };
+  mark();
+  requestAnimationFrame(() => $$(".seg", s.el).forEach(x => placePill(x, false)));
 }
 function toast(text) {
   const t = h(`<div class="toast">${esc(text)}</div>`);
@@ -289,8 +331,13 @@ function buildGlance() {
   ui.cal = ui.cal || { y: now.getFullYear(), m: now.getMonth(), sel: isoOf(now) };
   $(".page-inner", page).innerHTML = `
     <div class="date" data-g="date"></div>
-    <div class="clock"><span data-g="clock"></span><span class="ampm" data-g="ampm"></span></div>
-    <div class="info"><span class="label" data-g="sun"></span>${segHTML("clock", [["12", "12h"], ["24", "24h"]], h24() ? "24" : "12", "small")}</div>
+    <div class="clock-wrap" data-g="clockWrap">
+      <div class="clock" data-g="clock"><div data-g="hh"></div><div class="mm"><span data-g="mm"></span><span class="ampm" data-g="ampm"></span></div></div>
+      <div class="analog" data-g="analog">${analogHTML()}</div>
+    </div>
+    <div class="info"><span class="label" data-g="sun"></span><div class="segs">
+      ${segHTML("face", [["digital", "Digital"], ["analog", "Analog"]], faceAnalog() ? "analog" : "digital", "small")}
+      ${segHTML("clock", [["12", "12h"], ["24", "24h"]], h24() ? "24" : "12", "small")}</div></div>
     <div class="tiles" data-g="tiles"></div>
     <div class="card" data-g="weather"></div>
     <div class="card" data-g="calendar">
@@ -304,21 +351,20 @@ function buildGlance() {
     <div class="card" data-g="week"></div>`;
   for (const el of $$("[data-g]", page)) g[el.dataset.g] = el;
   g.page = page;
+  page.classList.toggle("is-analog", faceAnalog());
   renderClock(); renderTiles(); renderWeather(); calRender(0); renderWeek();
 
   $('[data-seg="clock"]', page).addEventListener("click", e => {
-    const b = e.target.closest("button"); if (!b) return;
-    S.clock24 = b.dataset.v === "24"; save(); setSeg(b.parentElement, b.dataset.v);
-    renderClock(); fitClock(); renderTiles(); renderWeatherHours(); renderCalDetail(); renderWeek();
+    const b = e.target.closest("button"); if (b) set24(b.dataset.v === "24");
+  });
+  $('[data-seg="face"]', page).addEventListener("click", e => {
+    const b = e.target.closest("button"); if (b) setClockFace(b.dataset.v);
   });
   $(".cal-nav", page).addEventListener("click", e => {
     const b = e.target.closest("[data-cal]"); if (!b) return;
     if (b.dataset.cal === "today") calToday(); else calShift(+b.dataset.cal);
   });
   wireCalendarSwipe(g.calVp);
-  wireTasks(g.calDetail, () => { renderCalDetail(); renderTiles(); renderWeek(); markBusy(); });
-  wireTaskDrag(g.calDetail, { list: () => g.calDetail, bands: false,
-    refresh: () => { renderCalDetail(); renderTiles(); renderWeek(); } });
   wireTasks(g.tiles, () => {});
   g.tiles.addEventListener("click", e => {
     const t = e.target.closest("[data-tile]"); if (!t) return;
@@ -328,18 +374,58 @@ function buildGlance() {
 }
 function afterGlanceMount() {
   placePill($('[data-seg="clock"]', g.page), false);
+  placePill($('[data-seg="face"]', g.page), false);
   const ws = $('[data-seg="city"]', g.page); if (ws) placePill(ws, false);
   fitClock();
   new ResizeObserver(() => fitClock()).observe(g.page);
   refreshOnline();
 }
 
+const faceAnalog = () => S.clock_face === "analog";
+function set24(on) {
+  S.clock24 = on; save();
+  if (g.page) { const sg = $('[data-seg="clock"]', g.page); setSeg(sg, on ? "24" : "12"); }
+  renderClock(); fitClock(); renderTiles(); renderWeatherHours(); renderCalDetail(); renderWeek();
+}
+function setClockFace(face) {
+  S.clock_face = face === "analog" ? "analog" : "digital"; save();
+  if (!g.page) return;
+  setSeg($('[data-seg="face"]', g.page), S.clock_face);
+  g.page.classList.toggle("is-analog", faceAnalog());
+  renderClock(); fitClock();
+  g.clockWrap.animate([{ opacity: 0, transform: "scale(.97)" }, { opacity: 1, transform: "none" }], { duration: 320, easing: EASE });
+}
+function analogHTML() {
+  const P = (r, deg) => { const a = deg * Math.PI / 180; return [(100 + r * Math.sin(a)).toFixed(2), (100 - r * Math.cos(a)).toFixed(2)]; };
+  let ticks = "", nums = "";
+  for (let i = 0; i < 60; i++) {
+    if (i % 5 === 0) continue;
+    const [x1, y1] = P(87.5, i * 6), [x2, y2] = P(92, i * 6);
+    ticks += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+  }
+  for (let hr = 1; hr <= 12; hr++) { const [x, y] = P(82, hr * 30); nums += `<text x="${x}" y="${y}">${hr}</text>`; }
+  const hand = (cls, body) => `<svg class="hand ${cls}" viewBox="0 0 200 200" aria-hidden="true">${body}</svg>`;
+  return `<svg class="face" viewBox="0 0 200 200" role="img" aria-label="Analog clock">
+      <circle class="rim" cx="100" cy="100" r="98"/><circle class="dial" cx="100" cy="100" r="96"/>
+      <g class="ticks">${ticks}</g><g class="nums">${nums}</g></svg>
+    ${hand("h", '<line x1="100" y1="110" x2="100" y2="50"/>')}
+    ${hand("m", '<line x1="100" y1="112" x2="100" y2="22"/>')}
+    ${hand("s", '<line class="needle" x1="100" y1="100" x2="100" y2="14"/><line class="tail" x1="100" y1="100" x2="100" y2="119"/><circle cx="100" cy="100" r="5"/><circle class="pin" cx="100" cy="100" r="2"/>')}`;
+}
+function syncAnalog() {
+  // the hands turn with CSS animations (smooth, on the GPU); this lines them up with the real time
+  if (!g.analog || !faceAnalog()) return;
+  const n = new Date(); const s = n.getSeconds() + n.getMilliseconds() / 1000;
+  const m = n.getMinutes() * 60 + s, hr = (n.getHours() % 12) * 3600 + m;
+  for (const [cls, t] of [["s", s], ["m", m], ["h", hr]]) $(`.hand.${cls}`, g.analog).style.animationDelay = `-${t.toFixed(3)}s`;
+}
 function renderClock() {
   if (!g.clock) return;
   const now = new Date();
-  const hh = h24() ? pad2(now.getHours()) : pad2(now.getHours() % 12 || 12);
-  g.clock.textContent = `${hh}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`;
+  const hh = h24() ? pad2(now.getHours()) : String(now.getHours() % 12 || 12);
+  g.hh.textContent = hh; g.mm.textContent = pad2(now.getMinutes());
   g.ampm.textContent = h24() ? "" : (now.getHours() < 12 ? "AM" : "PM");
+  if (faceAnalog() && (!g.analogSynced || now.getSeconds() === 0)) { syncAnalog(); g.analogSynced = true; }
   g.date.textContent = longDate(now);
   const w = wxFor(selCity()[1]);
   if (w && w.sunrise) {
@@ -348,11 +434,12 @@ function renderClock() {
   } else g.sun.textContent = "";
 }
 function fitClock() {
-  if (!g.clock) return;
-  const avail = g.clock.parentElement.clientWidth - (g.ampm.textContent ? g.ampm.offsetWidth + 8 : 0);
+  if (!g.clock || faceAnalog()) return;
+  // two stacked lines, hours over minutes, about half the card wide
+  const avail = g.clockWrap.clientWidth;
   g.clock.style.fontSize = "100px";
-  const w = g.clock.getBoundingClientRect().width;
-  g.clock.style.fontSize = Math.min(150, Math.floor(100 * avail / w * 0.995)) + "px";
+  const w = Math.max(g.hh.getBoundingClientRect().width, $(".mm", g.clock).firstElementChild.getBoundingClientRect().width) || 1;
+  g.clock.style.fontSize = Math.max(60, Math.min(168, Math.floor(100 * avail * 0.46 / w))) + "px";
 }
 
 function nextEvent() {
@@ -519,15 +606,10 @@ function wireCalendarSwipe(vp) {
 function renderCalDetail(animate = false) {
   if (!g.calDetail) return;
   const d = parseIso(ui.cal.sel); const iso = ui.cal.sel;
-  const evs = eventsOn(d); const tasks = D.days[iso] || [];
+  const evs = eventsOn(d);
   g.calDetail.innerHTML = `<div class="detail-day">${longDate(d)}${iso === todayIso() ? " · Today" : ""}</div>
-    ${evs.map(e => { const s = parseLocal(e.start); return `<div class="ev"><div class="t">${e.all_day || !sameDay(s, d) ? "All day" : fmtTime(s)}</div><div class="grow">${esc(e.title)}</div></div>`; }).join("")}
-    ${tasksHTML(tasks)}
-    ${!evs.length && !tasks.length ? '<div class="label">Nothing planned.</div>' : ""}
-    <div class="add"><input placeholder="Add a task for this day…" data-add></div>`;
-  $("[data-add]", g.calDetail).addEventListener("keydown", e => {
-    if (e.key === "Enter" && e.target.value.trim()) { addTask(iso, e.target.value.trim()); renderCalDetail(); renderTiles(); renderWeek(); $("[data-add]", g.calDetail).focus(); }
-  });
+    ${evs.map(e => { const s = parseLocal(e.start); return `<div class="ev"><div class="t">${e.all_day || !sameDay(s, d) ? "All day" : fmtTime(s)}</div><div class="grow">${esc(e.title)}${e.location ? `<div class="loc">${esc(e.location)}</div>` : ""}</div></div>`; }).join("")}
+    ${!evs.length ? `<div class="label">${hasCal() ? "No events." : "Connect a calendar to see your events here."}</div>` : ""}`;
   if (animate) g.calDetail.animate([{ opacity: 0, transform: "translateY(4px)" }, { opacity: 1, transform: "none" }], { duration: 240, easing: EASE });
 }
 function renderWeek() {
@@ -1101,6 +1183,7 @@ function wireNoteDrag(page, body, changed) {
 function wireChrome() {
   $("#tabs").addEventListener("click", e => { const b = e.target.closest("button"); if (b && b.dataset.tab !== ui.tab) showTab(b.dataset.tab); });
   $("#theme").onclick = toggleTheme;
+  $("#settings").innerHTML = ICON.gear; $("#settings").onclick = openSettings;
   // where the widget lives: on top of apps, on the desktop behind them, or a normal window
   const setLayer = layer => {
     S.layer = layer; S.on_top = layer === "top";
@@ -1127,6 +1210,7 @@ function wireChrome() {
           r.data.settings.window = S.window; D = r.data; S = D.settings; save(true); applyTheme(); ui.noteId = null; showTab(ui.tab, false); toast("Backup imported");
         });
       }],
+      ["Settings…", openSettings],
       "-", ["Close DeskTodo", () => $("#close").click()],
       "-", [`DeskTodo ${ui.version || ""}`.trim(), () => toast(`You're running DeskTodo ${ui.version || ""}`.trim())],
     ]);
@@ -1161,6 +1245,8 @@ function tick() {
   if (tl) { const d = new Date(); tl.textContent = `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} — ${fmtTime(d)}`; }
   setTimeout(tick, 1000 - (Date.now() % 1000) + 5);
 }
+
+document.addEventListener("visibilitychange", () => { if (!document.hidden) syncAnalog(); });
 
 // ---------------------------------------------------------------- start
 async function start() {

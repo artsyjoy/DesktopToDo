@@ -10,7 +10,10 @@
 :root {
   --bg: #e8e8e6; --card: #f6f6f4; --text: #1b1b1b; --muted: #7a7a77; --faint: #b3b3b0;
   --line: #d8d8d5; --chip: #dcdcd9; --seg-on: #1b1b1b; --seg-on-fg: #f6f6f4;
-  --accent: #f26b1d; --accent-text: #d9581a; --on-accent: #ffffff; --on-accent-muted: #ffdcc8;
+  --accent: #f26b1d; --on-accent: #ffffff;
+  --accent-text: color-mix(in srgb, var(--accent) var(--accent-shade, 86%), #000);
+  --on-accent-muted: color-mix(in srgb, var(--on-accent) 76%, var(--accent));
+  --clock-face: #fbfbf9; --clock-rim: #cfcfcb; --clock-hand: #1b1b1b; --clock-mark: #3a3a38;
   --tile-dark: #2b2b2b; --on-dark: #f2f2f0; --on-dark-muted: #9d9d99;
   --shade-to: #000000; --shade-step: 3.5%;
   --pad: 22px; --gap: 10px; --radius: 20px; --card-pad: 18px;
@@ -20,7 +23,8 @@
 :root.dark {
   --bg: #0f0f0f; --card: #1c1c1c; --text: #f1f1ef; --muted: #8f8f8b; --faint: #555553;
   --line: #2a2a2a; --chip: #2a2a2a; --seg-on: #e9e9e6; --seg-on-fg: #141414;
-  --accent: #f26b1d; --accent-text: #f47b37; --on-accent: #ffffff; --on-accent-muted: #ffdcc8;
+  --accent-text: color-mix(in srgb, var(--accent) 88%, #fff);
+  --clock-face: #070707; --clock-rim: #3b3b3a; --clock-hand: #f1f1ef; --clock-mark: #d6d6d3;
   --tile-dark: #2e2e2e; --on-dark: #f2f2f0; --on-dark-muted: #9d9d99;
   --shade-to: #ffffff; --shade-step: 2.8%;
   color-scheme: dark;
@@ -92,11 +96,40 @@ input::placeholder { color: var(--faint); }
 
 /* ---------- at a glance ---------- */
 .glance { container-type: inline-size; }
-.date { font-weight: 600; font-size: 20px; }
-.clock { font-family: "Space Grotesk", "Barlow", sans-serif; font-weight: 500; line-height: .86; letter-spacing: -.02em;
-  font-variant-numeric: tabular-nums; white-space: nowrap; margin: 6px 0 10px; display: flex; align-items: baseline; }
-.clock .ampm { font-family: "Barlow"; font-weight: 800; font-size: 13px; color: var(--muted); margin-left: 6px; letter-spacing: 0; }
-.info { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.date { font-weight: 600; font-size: 20px; text-align: center; margin-top: 10px; }
+.clock-wrap { margin: 16px 0 18px; }
+.clock { font-family: "Space Grotesk", "Barlow", sans-serif; font-weight: 500; line-height: .84; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums; white-space: nowrap; display: flex; flex-direction: column; align-items: center; }
+.clock .mm { position: relative; }
+.clock .ampm { position: absolute; left: 100%; bottom: .14em; font-family: "Barlow"; font-weight: 800; font-size: 13px;
+  color: var(--muted); margin-left: 8px; letter-spacing: 0; line-height: 1; }
+.is-analog .clock, .analog { display: none; }
+.is-analog .analog { display: block; }
+
+/* analog face: a quiet dial with minute marks, numerals, plain hands and an accent second hand */
+.analog { position: relative; width: min(100%, 290px); aspect-ratio: 1; margin: 0 auto; }
+.analog svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.analog .face { filter: drop-shadow(0 10px 24px rgba(0,0,0,.18)); }
+.analog .rim { fill: none; stroke: var(--clock-rim); stroke-width: 1.4; }
+.analog .dial { fill: var(--clock-face); }
+.analog .ticks line { stroke: var(--clock-mark); stroke-width: .8; stroke-linecap: round; opacity: .75; }
+.analog .nums text { fill: var(--clock-mark); font: 500 13px "Barlow", sans-serif; text-anchor: middle; dominant-baseline: central; }
+.analog .hand { animation: spin linear infinite; will-change: transform; }
+.analog .hand line { stroke: var(--clock-hand); stroke-linecap: round; }
+.analog .hand.h { animation-duration: 43200s; }
+.analog .hand.h line { stroke-width: 6.5; }
+.analog .hand.m { animation-duration: 3600s; }
+.analog .hand.m line { stroke-width: 4.6; }
+.analog .hand.s { animation-duration: 60s; }
+.analog .hand.s line { stroke: var(--accent); }
+.analog .hand.s .needle { stroke-width: 1.3; }
+.analog .hand.s .tail { stroke-width: 4.6; }
+.analog .hand.s circle { fill: var(--accent); }
+.analog .hand.s .pin { fill: color-mix(in srgb, var(--accent) 70%, #000); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.info .segs { display: flex; gap: 6px; flex: none; }
+.is-analog [data-seg="clock"] { display: none; }
+.info { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); margin-top: 12px; }
 .tiles .card { margin-top: 0; min-height: 132px; cursor: pointer; transition: transform .2s var(--ease); }
 .tiles .card:active { transform: scale(.98); }
@@ -257,6 +290,19 @@ input::placeholder { color: var(--faint); }
 .howto summary { cursor: pointer; color: var(--text); font-size: 13px; font-weight: 600; padding: 4px 0; }
 .howto .muted { margin: 4px 0; }
 .sheet .howto a { display: inline; margin: 0; font-size: inherit; }
+/* settings sheet */
+.set-label { color: var(--muted); font-weight: 600; font-size: 12.5px; margin: 14px 0 8px; }
+.set-row { display: flex; gap: 8px; }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, 32px); gap: 10px; }
+.sw { width: 32px; height: 32px; border-radius: 50%; background: var(--c); position: relative; cursor: pointer;
+  transition: transform .15s var(--ease); }
+.sw:hover { transform: scale(1.08); }
+.sw.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--c); }
+.sw.custom { background: conic-gradient(#e5484d, #f5a524, #f2c230, #30a46c, #0d9bb5, #3e63dd, #8e4ec6, #e93d82, #e5484d); }
+.sw.custom.on { background: conic-gradient(#e5484d, #f5a524, #f2c230, #30a46c, #0d9bb5, #3e63dd, #8e4ec6, #e93d82, #e5484d);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--c); }
+.sw.custom.on::after { content: ""; position: absolute; inset: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 2px var(--bg); }
+.sw input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
 .result { padding: 6px 0; cursor: pointer; }
 .result:hover { color: var(--accent-text); }
 .actions { display: flex; gap: 8px; margin-top: 14px; }
