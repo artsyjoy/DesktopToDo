@@ -138,17 +138,6 @@ function showTab(tab, animate = true) {
 }
 
 // ---------------------------------------------------------------- theme
-const ACCENTS = [["#f26b1d", "Orange"], ["#f5a524", "Amber"], ["#f2c230", "Yellow"], ["#e5484d", "Red"], ["#e93d82", "Pink"],
-  ["#8e4ec6", "Violet"], ["#3e63dd", "Blue"], ["#0d9bb5", "Teal"], ["#30a46c", "Green"], ["#8b8d98", "Graphite"]];
-function applyAccent() {
-  const c = /^#[0-9a-f]{6}$/i.test(S.accent || "") ? S.accent : ACCENTS[0][0];
-  const [r, gg, b] = [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16) / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
-  const lum = .2126 * r + .7152 * gg + .0722 * b;            // light accents get dark text on top of them
-  const st = document.documentElement.style;
-  st.setProperty("--accent", c);
-  st.setProperty("--on-accent", lum > .45 ? "#141414" : "#ffffff");
-  st.setProperty("--accent-shade", lum > .45 ? "58%" : lum > .28 ? "74%" : "86%");   // keeps accent text readable on light grey
-}
 function applyTheme() {
   document.documentElement.classList.toggle("dark", S.theme !== "light");
   applyAccent();
@@ -188,33 +177,88 @@ function openSheet(html) {
   scrim.addEventListener("keydown", e => { if (e.key === "Escape") close(); });
   return { el: scrim.firstElementChild, close };
 }
+const ACCENTS = [["#de6712", "Orange"], ["#f4cc02", "Yellow"], ["#c92f18", "Red"], ["#3162ae", "Blue"],
+  ["#1b3756", "Navy"], ["#026e3d", "Green"], ["#d8d0ba", "Sand"], ["#e8e8e8", "Light grey"]];
+const accentOf = () => /^#[0-9a-f]{6}$/i.test(S.accent || "") ? S.accent.toLowerCase() : ACCENTS[0][0];
+function lumOf(c) {
+  const [r, gg, b] = [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16) / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+  return .2126 * r + .7152 * gg + .0722 * b;
+}
+function applyAccent() {
+  const c = accentOf(), lum = lumOf(c), dark = S.theme !== "light";
+  const root = document.documentElement, st = root.style;
+  st.setProperty("--accent", c);
+  st.setProperty("--on-accent", lum > .45 ? "#141414" : "#ffffff");              // light accents get dark text on them
+  st.setProperty("--accent-shade", lum > .45 ? "58%" : lum > .28 ? "74%" : "86%");  // accent text stays readable on light grey
+  st.setProperty("--accent-tint", lum < .05 ? "55%" : lum < .12 ? "72%" : "88%");   // ...and on near-black
+  // a very pale accent on the light theme (or a very deep one on the dark theme) gets a hairline edge
+  root.classList.toggle("accent-edge", dark ? lum < .02 : lum > .6);
+}
+function hsvToHex(hh, s, v) {
+  const f = n => { const k = (n + hh / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+  return "#" + [f(5), f(3), f(1)].map(x => Math.round(x * 255).toString(16).padStart(2, "0")).join("");
+}
+function hexToHsv(hex) {
+  const [r, gg, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const mx = Math.max(r, gg, b), d = mx - Math.min(r, gg, b);
+  let hh = 0;
+  if (d) hh = mx === r ? ((gg - b) / d) % 6 : mx === gg ? (b - r) / d + 2 : (r - gg) / d + 4;
+  return [(hh * 60 + 360) % 360, mx ? d / mx : 0, mx];
+}
 function openSettings() {
-  const cur = () => (S.accent || ACCENTS[0][0]).toLowerCase();
-  const custom = () => !ACCENTS.some(([c]) => c === cur());
+  const custom = () => !ACCENTS.some(([c]) => c === accentOf());
   const s = openSheet(`<h2>Settings</h2>
     <div class="set-label">Accent color</div>
     <div class="swatches" data-sw>${ACCENTS.map(([c, n]) => `<button class="sw" style="--c:${c}" data-c="${c}" title="${n}" aria-label="${n}"></button>`).join("")}
-      <label class="sw custom" title="Pick any color" aria-label="Pick any color"><input type="color" data-pick></label></div>
+      <button class="sw custom" data-custom title="Pick any color" aria-label="Pick any color"></button></div>
+    <div class="pick-wrap" data-pickwrap><div><div class="picker">
+      <div class="sv" data-sv><span class="knob"></span></div>
+      <div class="hue" data-hue><span class="knob"></span></div>
+      <div class="pick-row"><span class="pick-dot"></span><div class="field"><input data-hex maxlength="7" spellcheck="false" aria-label="Hex color"></div></div>
+    </div></div></div>
     <div class="set-label">Clock</div>
     <div class="set-row">${segHTML("set-face", [["digital", "Digital"], ["analog", "Analog"]], S.clock_face === "analog" ? "analog" : "digital", "small")}
       ${segHTML("set-24", [["12", "12h"], ["24", "24h"]], h24() ? "24" : "12", "small")}</div>
     <div class="actions"><button class="btn" data-done>Done</button><button class="btn ghost" data-reset>Reset color</button></div>`);
-  const sw = $("[data-sw]", s.el), pick = $("[data-pick]", s.el);
-  const mark = () => {
-    $$(".sw[data-c]", sw).forEach(b => b.classList.toggle("on", b.dataset.c === cur()));
-    const cu = $(".sw.custom", sw); cu.classList.toggle("on", custom()); cu.style.setProperty("--c", custom() ? cur() : "transparent");
-    pick.value = cur();
+  const sw = $("[data-sw]", s.el), wrap = $("[data-pickwrap]", s.el), sv = $("[data-sv]", s.el), hue = $("[data-hue]", s.el), hex = $("[data-hex]", s.el);
+  let hsv = hexToHsv(accentOf());
+  const draw = () => {
+    const c = accentOf();
+    $$(".sw[data-c]", sw).forEach(b => b.classList.toggle("on", b.dataset.c === c));
+    const cu = $("[data-custom]", sw); cu.classList.toggle("on", custom()); cu.style.setProperty("--c", c);
+    sv.style.setProperty("--hue", hsv[0]);
+    const k1 = $(".knob", sv), k2 = $(".knob", hue);
+    k1.style.left = `${hsv[1] * 100}%`; k1.style.top = `${(1 - hsv[2]) * 100}%`; k1.style.setProperty("--k", c);
+    k2.style.left = `${hsv[0] / 360 * 100}%`; k2.style.setProperty("--k", `hsl(${hsv[0]} 100% 50%)`);
+    if (document.activeElement !== hex) hex.value = c.toUpperCase();
   };
-  const set = c => { S.accent = c; applyAccent(); mark(); save(); };
-  sw.addEventListener("click", e => { const b = e.target.closest("[data-c]"); if (b) set(b.dataset.c); });
-  pick.addEventListener("input", () => set(pick.value.toLowerCase()));
+  const set = c => { S.accent = c; applyAccent(); draw(); save(); };
+  sw.addEventListener("click", e => {
+    if (e.target.closest("[data-custom]")) { wrap.classList.toggle("open"); return; }
+    const b = e.target.closest("[data-c]"); if (b) { hsv = hexToHsv(b.dataset.c); set(b.dataset.c); }
+  });
+  const drag = (el, fn) => el.addEventListener("pointerdown", e => {
+    el.setPointerCapture(e.pointerId);
+    const move = ev => { const r = el.getBoundingClientRect(); fn(Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height))); set(hsvToHex(...hsv)); };
+    const up = () => { el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up); };
+    el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+    move(e);
+  });
+  drag(sv, (x, y) => { hsv = [hsv[0], x, 1 - y]; });
+  drag(hue, x => { hsv = [Math.min(359.9, x * 360), hsv[1] || .8, hsv[2] || .8]; });
+  hex.addEventListener("input", () => {
+    const v = hex.value.trim().replace(/^#?/, "#").toLowerCase();
+    if (/^#[0-9a-f]{6}$/.test(v)) { hsv = hexToHsv(v); set(v); }
+  });
+  hex.addEventListener("blur", draw);
   $('[data-seg="set-face"]', s.el).addEventListener("click", e => {
     const b = e.target.closest("button"); if (b) { setSeg(b.parentElement, b.dataset.v); setClockFace(b.dataset.v); } });
   $('[data-seg="set-24"]', s.el).addEventListener("click", e => {
     const b = e.target.closest("button"); if (b) { setSeg(b.parentElement, b.dataset.v); set24(b.dataset.v === "24"); } });
   $("[data-done]", s.el).onclick = s.close;
-  $("[data-reset]", s.el).onclick = () => { delete S.accent; applyAccent(); mark(); save(); };
-  mark();
+  $("[data-reset]", s.el).onclick = () => { delete S.accent; hsv = hexToHsv(accentOf()); applyAccent(); draw(); save(); };
+  if (custom()) wrap.classList.add("open");
+  draw();
   requestAnimationFrame(() => $$(".seg", s.el).forEach(x => placePill(x, false)));
 }
 function toast(text) {
