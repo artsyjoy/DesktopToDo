@@ -114,11 +114,10 @@ input::placeholder { color: var(--faint); }
 .analog .ticks .hr { stroke-width: .9; }
 .analog .ticks .q { stroke-width: 1.1; }
 .analog .hand { animation: spin linear infinite; will-change: transform; }
-.analog .hand line { stroke: var(--clock-hand); stroke-linecap: round; }
+.analog .hand path { fill: var(--clock-hand); }
+.analog .hand line { stroke-linecap: round; }
 .analog .hand.h { animation-duration: 43200s; }
-.analog .hand.h line { stroke-width: 2.1; }
 .analog .hand.m { animation-duration: 3600s; }
-.analog .hand.m line { stroke-width: 1.4; }
 .analog .hand.s { animation-duration: 60s; }
 .analog .hand.s line { stroke: var(--accent); stroke-width: .8; }
 .analog .hand.s circle { fill: var(--accent); }
